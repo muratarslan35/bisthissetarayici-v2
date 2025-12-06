@@ -1,15 +1,13 @@
-import threading
+
 import time
-import os
 import requests
+import os
 
 def keep_alive():
     url = os.getenv("SELF_URL")
     wait = int(os.getenv("SELF_PING_INTERVAL", 240))
-
     if not url:
         return
-
     while True:
         try:
             requests.get(url)
