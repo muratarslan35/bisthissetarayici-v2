@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>BIST Dashboard</title>
+
+    <style>
+        body {
+            background: #0d0d0d;
+            color: #e0e0e0;
+            font-family: Consolas, monospace;
+            padding: 20px;
+        }
+        .box {
+            background: #1a1a1a;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            color: #fff;
+        }
+        th, td {
+            padding: 8px;
+            border-bottom: 1px solid #333;
+        }
+        tr:hover {
+            background: #222;
+        }
+        .red { color: #ff4b4b;}
+        .green { color: #00ff9c;}
+        .yellow { color: #ffe45c;}
+    </style>
+
+    <script>
+        async function reloadData() {
+            let res = await fetch("/api");
+            let json = await res.json();
+
+            let box = document.getElementById("data");
+            let html = "";
+
+            if (json.data) {
+                html += "<table><tr><th>Hisse</th><th>ASENAX</th><th>YF</th><th>Gecikme</th></tr>";
+
+                json.data.forEach(row => {
+                    let dclass = row.delay ? "red" : "green";
+                    let dlabel = row.delay ? "DELAY" : "OK";
+
+                    html += `<tr>
+                        <td>${row.symbol}</td>
+                        <td>${row.asenax}</td>
+                        <td>${row.yfinance}</td>
+                        <td class="${dclass}">${dlabel}</td>
+                    </tr>`;
+                });
+                html += "</table>";
+            }
+
+            box.innerHTML = html;
+        }
+
+        setInterval(reloadData, 5000);
+        window.onload = reloadData;
+    </script>
+</head>
+
+<body>
+    <h1>BIST Dashboard — Real Time Monitor</h1>
+    <div id="data" class="box">Loading…</div>
+</body>
+</html>
