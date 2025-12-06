@@ -1,7 +1,7 @@
 
-import threading
 import time
 import os
+from flask import Flask, jsonify, send_from_directory
 from fetch_bist import fetch_bist_data
 from self_ping import start_self_ping
 
