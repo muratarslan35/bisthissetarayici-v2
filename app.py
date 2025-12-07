@@ -7,13 +7,12 @@ from self_ping import start_self_ping
 
 app = Flask(__name__)
 
-# Bu liste, başlangıçta boş, bot ilk mesajla otomatik eklenir
-chat_ids = []
+# Buraya kendi chat ID'nizi ekleyin
+# Örneğin: chat_ids = [661794787, 123456789]
+chat_ids = [661794787]  # Kendi ID'nizi buraya ekleyin
 
-# Telegram bot token
 TELEGRAM_TOKEN = "8588829956:AAEK2-wa75CoHQPjPFEAUU_LElRBduC-_TU"
 
-# Bildirim fonksiyonu, herkese mesaj gönderir
 def telegram_send(text):
     for cid in chat_ids:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -23,59 +22,83 @@ def telegram_send(text):
         except:
             pass
 
-# Kullanıcı /start veya herhangi bir mesaj yolladığında, ID'yi kaydet
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    data = request.get_json()
-    if not data:
-        return "OK"
-    try:
-        chat_id = data['message']['chat']['id']
-        # Chat ID'yi listeye ekle
-        if chat_id not in chat_ids:
-            chat_ids.append(chat_id)
-            print(f"Yeni chat ID eklendi: {chat_id}")
-            # Kullanıcıya onay mesajı
-            requests.post(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                json={"chat_id": chat_id, "text": "Merhaba! Bildirimler size de geliyor.", "parse_mode": "HTML"}
-            )
-    except:
-        pass
-    return "OK"
-
 # Sistem başlangıç bildirimi
 def sistem_bildir():
     telegram_send("🤖 Sistem başlatıldı ve aktif!")
 
-# Ana veri güncelleme döngüsü
+# Veri güncelleme ve bildirim döngüsü
 def update_loop():
     while True:
         try:
             data = fetch_bist_data()
             for his in data:
-                # RSI ve sapma kontrolleri
+                # Sinyal ve uyarı kontrolü
                 rsi = his.get("RSI")
+                last_signal = his.get("last_signal")
+                support_break = his.get("support_break")
+                resistance_break = his.get("resistance_break")
+                green_11 = his.get("green_mum_11")
+                green_15 = his.get("green_mum_15")
+                three_peak = his.get("three_peak_break")
+                price = his.get("current_price")
+                daily_change = his.get("daily_change")
+                volume = his.get("volume")
+                trend = his.get("trend")
+                signal_time = his.get("signal_time")
+
+                mesaj = ""
+
+                # RSI sınırları
                 if rsi is not None:
                     if rsi < 20:
-                        telegram_send(f"🔻 {his['symbol']} RSI {rsi:.2f} 20'nin altında!\n")
+                        mesaj += f"🔻 {his['symbol']} RSI {rsi:.2f} < 20!\n"
                     elif rsi > 80:
-                        telegram_send(f"🔺 {his['symbol']} RSI {rsi:.2f} 80'in üzerinde!\n")
-                # Sapma bildirimi
-                sapma = his.get("sapma_pct")
-                if sapma is not None and abs(sapma) > 5:
-                    telegram_send(f"🔎 {his['symbol']} Sapma: {sapma:.2f}% (Yfinance & TradingView)\n")
-                # Diğer uyarılar ve sinyaller
-                check_and_notify(his)
+                        mesaj += f"🔺 {his['symbol']} RSI {rsi:.2f} > 80!\n"
+
+                # Sinyaller
+                if last_signal == "AL":
+                    mesaj += f"🟢 {his['symbol']} AL sinyali!\n"
+                elif last_signal == "SAT":
+                    mesaj += f"🔴 {his['symbol']} SAT sinyali!\n"
+
+                # Destek/Direnç kırılımı
+                if support_break:
+                    mesaj += f"🟢 {his['symbol']} destek kırıldı!\n"
+                if resistance_break:
+                    mesaj += f"🔴 {his['symbol']} direnç kırıldı!\n"
+
+                # 3 tepe kırılımı
+                if three_peak:
+                    mesaj += f"⚠️ {his['symbol']} üç tepe kırılımı gerçekleşti!\n"
+
+                # Mumlar ve saat 11-15'teki yeşil mumlar
+                if green_11:
+                    mesaj += f"🟢 {his['symbol']} 4H saat 11'de yeşil mum oluştu.\n"
+                if green_15:
+                    mesaj += f"🟢 {his['symbol']} 4H saat 15'te yeşil mum oluştu.\n"
+
+                # Günlük ve diğer bilgiler
+                mesaj += f"Fiyat: {price} TL\n"
+                mesaj += f"Günlük değişim: {daily_change}\n"
+                mesaj += f"Hacim: {volume}\n"
+                mesaj += f"Trend: {trend}\n"
+                mesaj += f"Son sinyal: {last_signal}\n"
+                mesaj += f"Sinyal zamanı: {signal_time}\n"
+                mesaj += f"RSI: {rsi}\n"
+
+                # Bildirim gönder
+                if mesaj:
+                    telegram_send(mesaj)
+
             # Güncel veriyi kaydet
             with data_lock:
                 LATEST_DATA = {"status": "ok", "timestamp": int(time.time()), "data": data}
         except:
             with data_lock:
                 LATEST_DATA = {"status": "error", "error": "Hata oluştu"}
-        time.sleep(60)
+        time.sleep(60)  # 1 dakika
 
-# Dashboard ve API
+# Sistem başlangıç mesajı
 @app.route("/")
 def dashboard():
     return send_from_directory("static", "dashboard.html")
@@ -85,17 +108,9 @@ def api():
     with data_lock:
         return jsonify(LATEST_DATA)
 
-# Sistem başlatıldığında otomatik mesaj
-@app.before_first_request
-def sistem_baslangici():
-    telegram_send("🤖 Sistem aktif ve çalışıyor!")
-
+# Sistem ilk başlatıldığında mesaj
 if __name__ == "__main__":
-    # İlk mesaj (kullanıcılar bu URL'e mesaj gönderdiğinde ID kaydedilir)
-    threading.Thread(target=system_bildir).start()
-    # Veri güncelleme döngüsü
+    sistem_bildir()  # Buraya kendi ID'nizle bildirim gönderecek
     threading.Thread(target=update_loop, daemon=True).start()
-    # Self ping (sunucu kapanmasını engellemek için)
     start_self_ping()
-    # Uygulamayı başlat
     app.run(host="0.0.0.0", port=10000)
