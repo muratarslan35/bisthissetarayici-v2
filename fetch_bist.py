@@ -1,5 +1,6 @@
 import yfinance as yf
 
+# BIST hisse sembolleri
 symbols = [
     "THYAO.IS","ASELS.IS","SASA.IS","KRDMD.IS","HEKTS.IS",
     "TUPRS.IS","SISE.IS","BIMAS.IS","GARAN.IS","YKBNK.IS",
@@ -8,6 +9,7 @@ symbols = [
 
 def fetch_bist_data():
     result = []
+    # Toplu veri çek
     data = yf.download(tickers=symbols, period="1d", interval="1m")
     for sym in symbols:
         try:
