@@ -3,7 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta, time
 
-symbols = ["BIST30", "BIST100"]
+symbols = ["BIST30", "BIST100"]  # Güncel sembol isimleri
 
 def get_tradingview_price(symbol):
     try:
@@ -39,20 +39,25 @@ def fetch_bist_data():
         df = data['Close'][sym]
         if df.empty:
             continue
+
         current_price = df.iloc[-1]
         tv_price = get_tradingview_price(sym)
         if tv_price is None:
             tv_price = current_price
         sapma_pct = ((tv_price - current_price) / current_price) * 100
+
         high = data['High'][sym].max()
         low = data['Low'][sym].min()
         daily_change = high - low
+
         ma20 = df.rolling(window=20).mean().iloc[-1]
         ma50 = df.rolling(window=50).mean().iloc[-1]
         trend = "Yukarı" if ma20 > ma50 else "Aşağı"
+
         rsi_series = calculate_rsi(df)
         rsi = rsi_series.iloc[-1] if not rsi_series.empty else None
-        # Mumlar ve saat 11, 15
+
+        # Günlük mumlar ve saat 11, 15
         now = datetime.now()
         day_start = datetime.combine(now.date(), time(0,0))
         today_mum = df[df.index >= day_start]
