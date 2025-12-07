@@ -1,4 +1,4 @@
-
+import yfinance as yf
 
 symbols = [
     "THYAO.IS","ASELS.IS","SASA.IS","KRDMD.IS","HEKTS.IS",
