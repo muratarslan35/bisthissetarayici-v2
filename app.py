@@ -6,15 +6,15 @@ from fetch_bist import fetch_bist_data
 from self_ping import start_self_ping
 
 app = Flask(__name__)
+LATEST_DATA = {"status": "init", "data": None}
+data_lock = threading.Lock()
 
-# Buraya kendi chat ID'nizi ekleyin
-# Örneğin: chat_ids = [661794787, 123456789]
-chat_ids = [661794787]  # Kendi ID'nizi buraya ekleyin
-
+# Telegram bildirimleri
 TELEGRAM_TOKEN = "8588829956:AAEK2-wa75CoHQPjPFEAUU_LElRBduC-_TU"
+CHAT_ID = 661794787
 
 def telegram_send(text):
-    for cid in chat_ids:
+    for cid in [CHAT_ID]:  # Buraya listeye arkadaşlarınızın ID'lerini ekleyin
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         payload = {"chat_id": cid, "text": text, "parse_mode": "HTML"}
         try:
@@ -32,7 +32,6 @@ def update_loop():
         try:
             data = fetch_bist_data()
             for his in data:
-                # Sinyal ve uyarı kontrolü
                 rsi = his.get("RSI")
                 last_signal = his.get("last_signal")
                 support_break = his.get("support_break")
@@ -90,15 +89,14 @@ def update_loop():
                 if mesaj:
                     telegram_send(mesaj)
 
-            # Güncel veriyi kaydet
             with data_lock:
                 LATEST_DATA = {"status": "ok", "timestamp": int(time.time()), "data": data}
         except:
             with data_lock:
                 LATEST_DATA = {"status": "error", "error": "Hata oluştu"}
-        time.sleep(60)  # 1 dakika
+        time.sleep(60)
 
-# Sistem başlangıç mesajı
+# Sistem başlatıldığında otomatik mesaj
 @app.route("/")
 def dashboard():
     return send_from_directory("static", "dashboard.html")
@@ -108,9 +106,8 @@ def api():
     with data_lock:
         return jsonify(LATEST_DATA)
 
-# Sistem ilk başlatıldığında mesaj
 if __name__ == "__main__":
-    sistem_bildir()  # Buraya kendi ID'nizle bildirim gönderecek
+    sistem_bildir()
     threading.Thread(target=update_loop, daemon=True).start()
     start_self_ping()
     app.run(host="0.0.0.0", port=10000)
