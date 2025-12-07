@@ -4,4 +4,4 @@ yfinance
 beautifulsoup4
 pandas
 numpy
-
+gunicorn
