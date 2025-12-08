@@ -1,48 +1,44 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
-<meta charset="UTF-8" />
-<title>BIST Dashboard</title>
-<style>
-body { background:#0d0d0d; color:#e0e0e0; font-family:Consolas, monospace; padding:20px; }
-table { width:100%; border-collapse:collapse; }
-th, td { padding:8px; border-bottom:1px solid #333; }
-tr:hover { background:#222; }
-.green { color:#00ff9c; }
-.red { color:#ff4b4b; }
-.yellow { color:#ffe45c; }
-</style>
-<script>
-async function getData() {
-  const res = await fetch('/api');
-  const data = await res.json();
-  const container = document.getElementById('veri');
-  let html = '';
-  if(data.data) {
-    html += '<table><tr><th>Sembol</th><th>Fiyat</th><th>Günlük Değişim</th><th>Hacim</th><th>Trend</th><th>Sinyal</th></tr>';
-    data.data.forEach(h => {
-      const color = (h.last_signal==='AL') ? 'green' : (h.last_signal==='SAT') ? 'red' : '';
-      html += `<tr>
-        <td>${h.symbol}</td>
-        <td>${h.current_price.toFixed(2)}</td>
-        <td>${h.daily_change.toFixed(2)}</td>
-        <td>${h.volume}</td>
-        <td>${h.trend}</td>
-        <td class="${color}">${h.last_signal}</td>
-      </tr>`;
-    });
-    html += '</table>';
-  } else {
-    html = 'Veri alınamadı.';
-  }
-  document.getElementById('veri').innerHTML = html;
-}
-setInterval(getData, 5000);
-window.onload = getData;
-</script>
+    <meta charset="UTF-8">
+    <title>BIST Dashboard</title>
+    <style>
+        body { font-family: Arial; padding: 30px; background: #111; color: #fff; }
+        .box { padding: 20px; margin-bottom: 20px; background: #222; border-radius: 10px; }
+        h2 { color: #4CAF50; }
+    </style>
 </head>
 <body>
+
 <h1>BIST Dashboard</h1>
-<div id="veri">Yükleniyor...</div>
+
+<div class="box">
+    <h2>BIST 30</h2>
+    <p id="b30">Yükleniyor...</p>
+</div>
+
+<div class="box">
+    <h2>BIST 100</h2>
+    <p id="b100">Yükleniyor...</p>
+</div>
+
+<script>
+    async function loadData() {
+        try {
+            const res = await fetch("/bist");
+            const data = await res.json();
+
+            document.getElementById("b30").innerText = data.BIST30 ?? "Veri yok";
+            document.getElementById("b100").innerText = data.BIST100 ?? "Veri yok";
+        } catch (e) {
+            console.log("API hatası:", e);
+        }
+    }
+
+    loadData();
+    setInterval(loadData, 60000);
+</script>
+
 </body>
 </html>
