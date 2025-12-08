@@ -2,7 +2,7 @@ import yfinance as yf
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta, time
+from datetime import datetime
 
 def get_bist_symbols():
     try:
@@ -20,9 +20,6 @@ def get_bist_symbols():
         return []
 
 def get_tradingview_price(symbol):
-    # Bu fonksiyon, TradingView'den fiyat alır.
-    # Gerçek API veya scraping kullanmalısınız.
-    # Örnek: aşağıdaki, 'sayfa yapısına göre düzenlenmeli.
     try:
         url = f"https://www.tradingview.com/symbols/{symbol}/"
         headers = {'User-Agent': 'Mozilla/5.0'}
@@ -53,38 +50,38 @@ def fetch_bist_data():
     symbols = get_bist_symbols()
     results = []
     try:
-        data = yf.download(tickers=symbols, period="5d", interval="15m")
+        data = yf.download(tickers=symbols, period="5d", interval="15m", group_by='ticker')
     except:
         return results
     for symbol in symbols:
         try:
-            df = data['Close'][symbol]
+            df = data[symbol]
             if df.empty:
                 continue
-            current_price = df.iloc[-1]
+            current_price = df['Close'].iloc[-1]
             tv_price = get_tradingview_price(symbol)
             if tv_price is None:
                 tv_price = current_price
-            sapma_pct = ((tv_price - current_price) / current_price) * 100
-            high = data['High'][symbol].max()
-            low = data['Low'][symbol].min()
-            daily_change = high - low
-            ma20 = df.rolling(window=20).mean().iloc[-1]
-            ma50 = df.rolling(window=50).mean().iloc[-1]
+            high = df['High'].max()
+            low = df['Low'].min()
+            daily_change = ((current_price - low) / low) * 100
+            ma20 = df['Close'].rolling(window=20).mean().iloc[-1]
+            ma50 = df['Close'].rolling(window=50).mean().iloc[-1]
             trend = "Yukarı" if ma20 > ma50 else "Aşağı"
-            rsi_series = calculate_rsi(df)
+            rsi_series = calculate_rsi(df['Close'])
             rsi = rsi_series.iloc[-1] if not rsi_series.empty else None
+            volume = df['Volume'].iloc[-1]
             results.append({
                 "symbol": symbol.replace('.IS',''),
                 "current_price": float(current_price),
                 "yfinance_price": float(current_price),
                 "tv_price": tv_price,
-                "sapma_pct": sapma_pct,
+                "sapma_pct": ((tv_price - current_price) / current_price) * 100,
                 "trend": trend,
                 "last_signal": "AL" if rsi and rsi < 30 else "SAT" if rsi and rsi > 70 else "Yok",
                 "signal_time": datetime.now().strftime("%H:%M"),
                 "daily_change": round((current_price - low) / low * 100, 2),
-                "volume": int(data['Volume'][symbol].iloc[-1]),
+                "volume": int(volume),
             })
         except:
             continue
