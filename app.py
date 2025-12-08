@@ -1,7 +1,8 @@
-from flask import Flask, jsonify, send_from_directory 
+from flask import Flask, jsonify, send_from_directory
 import threading
 import time
 import requests
+import os
 from fetch_bist import fetch_bist_data
 from self_ping import start_self_ping
 
@@ -14,7 +15,7 @@ TELEGRAM_TOKEN = "8588829956:AAEK2-wa75CoHQPjPFEAUU_LElRBduC-_TU"
 CHAT_ID = 661794787
 
 def telegram_send(text):
-    for cid in [CHAT_ID]:  # Buraya listeye arkadaşlarınızın ID'lerini ekleyin
+    for cid in [CHAT_ID]:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         payload = {"chat_id": cid, "text": text, "parse_mode": "HTML"}
         try:
@@ -22,12 +23,11 @@ def telegram_send(text):
         except:
             pass
 
-# Sistem başlangıç bildirimi
 def sistem_bildir():
     telegram_send("🤖 Sistem başlatıldı ve aktif!")
 
-# Veri güncelleme ve bildirim döngüsü
 def update_loop():
+    global LATEST_DATA
     while True:
         try:
             data = fetch_bist_data()
@@ -47,36 +47,30 @@ def update_loop():
 
                 mesaj = ""
 
-                # RSI sınırları
                 if rsi is not None:
                     if rsi < 20:
                         mesaj += f"🔻 {his['symbol']} RSI {rsi:.2f} < 20!\n"
                     elif rsi > 80:
                         mesaj += f"🔺 {his['symbol']} RSI {rsi:.2f} > 80!\n"
 
-                # Sinyaller
                 if last_signal == "AL":
                     mesaj += f"🟢 {his['symbol']} AL sinyali!\n"
                 elif last_signal == "SAT":
                     mesaj += f"🔴 {his['symbol']} SAT sinyali!\n"
 
-                # Destek/Direnç kırılımı
                 if support_break:
                     mesaj += f"🟢 {his['symbol']} destek kırıldı!\n"
                 if resistance_break:
                     mesaj += f"🔴 {his['symbol']} direnç kırıldı!\n"
 
-                # 3 tepe kırılımı
                 if three_peak:
                     mesaj += f"⚠️ {his['symbol']} üç tepe kırılımı gerçekleşti!\n"
 
-                # Mumlar ve saat 11-15'teki yeşil mumlar
                 if green_11:
                     mesaj += f"🟢 {his['symbol']} 4H saat 11'de yeşil mum oluştu.\n"
                 if green_15:
                     mesaj += f"🟢 {his['symbol']} 4H saat 15'te yeşil mum oluştu.\n"
 
-                # Günlük ve diğer bilgiler
                 mesaj += f"Fiyat: {price} TL\n"
                 mesaj += f"Günlük değişim: {daily_change}\n"
                 mesaj += f"Hacim: {volume}\n"
@@ -85,18 +79,18 @@ def update_loop():
                 mesaj += f"Sinyal zamanı: {signal_time}\n"
                 mesaj += f"RSI: {rsi}\n"
 
-                # Bildirim gönder
                 if mesaj:
                     telegram_send(mesaj)
 
             with data_lock:
                 LATEST_DATA = {"status": "ok", "timestamp": int(time.time()), "data": data}
-        except:
+
+        except Exception as e:
             with data_lock:
-                LATEST_DATA = {"status": "error", "error": "Hata oluştu"}
+                LATEST_DATA = {"status": "error", "error": str(e)}
+
         time.sleep(60)
 
-# Sistem başlatıldığında otomatik mesaj
 @app.route("/")
 def dashboard():
     return send_from_directory("static", "dashboard.html")
@@ -110,4 +104,6 @@ if __name__ == "__main__":
     sistem_bildir()
     threading.Thread(target=update_loop, daemon=True).start()
     start_self_ping()
-    app.run(host="0.0.0.0", port=10000)
+
+    # 🔥 Render'ın zorunlu port sistemi (en önemli satır)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
