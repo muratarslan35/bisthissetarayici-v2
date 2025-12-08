@@ -5,7 +5,7 @@ import os
 
 def start_self_ping():
     url = os.getenv("SELF_URL")
-    interval = int(os.getenv("SELF_PING_INTERVAL", 300))
+    interval = int(os.getenv("SELF_PING_INTERVAL", 240))
 
     if not url:
         return
@@ -13,7 +13,7 @@ def start_self_ping():
     def loop():
         while True:
             try:
-                requests.get(url, timeout=10)
+                requests.get(url, timeout=5)
             except:
                 pass
             time.sleep(interval)
