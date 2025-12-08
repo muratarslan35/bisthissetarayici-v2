@@ -27,7 +27,7 @@ def sistem_bildir():
     telegram_send("🤖 Sistem başlatıldı ve aktif!")
 
 def update_loop():
-    global LATEST_DATA  # En başta kullanmak önemli
+    global LATEST_DATA
     while True:
         try:
             data = fetch_bist_data()
@@ -79,6 +79,7 @@ def update_loop():
                 if mesaj:
                     telegram_send(mesaj)
 
+            # Güncel veriyi güncelle
             with data_lock:
                 LATEST_DATA = {"status": "ok", "timestamp": int(time.time()), "data": data}
         except Exception as e:
@@ -97,7 +98,7 @@ def api():
         return jsonify(LATEST_DATA)
 
 if __name__ == "__main__":
-    sistem_bildir()
-    threading.Thread(target=update_loop, daemon=True).start()
-    start_self_ping()
+    sistem_bildir()  # Sistem başlatıldığında bildirim gönder
+    threading.Thread(target=update_loop, daemon=True).start()  # Arka planda güncellemeleri başlat
+    start_self_ping()  # Kendi kendine ping
     app.run(host="0.0.0.0", port=10000)
