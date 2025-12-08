@@ -10,7 +10,7 @@ LATEST_DATA = {"status": "init", "data": None}
 data_lock = threading.Lock()
 
 # Kendi Telegram ID'lerinizi ve tokeninizi burada ayarlayın
-CHAT_IDS = [661794787]  # örnek ID, ekleyebilirsiniz
+CHAT_IDS = [661794787]
 TELEGRAM_TOKEN = "8588829956:AAEK2-wa75CoHQPjPFEAUU_LElRBduC-_TU"
 
 def telegram_send(text):
@@ -27,6 +27,7 @@ def sistem_bildir():
     telegram_send("🤖 Sistem başlatıldı ve aktif!")
 
 def update_loop():
+    global LATEST_DATA  # En başta kullanmak önemli
     while True:
         try:
             data = fetch_bist_data()
@@ -79,12 +80,10 @@ def update_loop():
                     telegram_send(mesaj)
 
             with data_lock:
-                global LATEST_DATA
                 LATEST_DATA = {"status": "ok", "timestamp": int(time.time()), "data": data}
         except Exception as e:
             print(f"update_loop hatası: {e}")
             with data_lock:
-                global LATEST_DATA
                 LATEST_DATA = {"status": "error", "error": "Hata oluştu"}
         time.sleep(60)
 
