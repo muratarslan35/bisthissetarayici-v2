@@ -9,7 +9,7 @@ app = Flask(__name__)
 LATEST_DATA = {"status": "init", "data": None}
 data_lock = threading.Lock()
 
-# Kendi Telegram ID'lerinizi ve tokeninizi burada ayarlayın
+# Telegram ayarları
 CHAT_IDS = [661794787]
 TELEGRAM_TOKEN = "8588829956:AAEK2-wa75CoHQPjPFEAUU_LElRBduC-_TU"
 
@@ -24,11 +24,13 @@ def telegram_send(text):
             print(f"Telegram gönderim hatası: {e}")
 
 def sistem_bildir():
-    telegram_send("🤖 Sistem başlatıldı ve aktif!")
+    print("Sistem başlatılıyor ve bildirim gönderiliyor...")
+    telegram_send("🤖 Sistem aktif ve çalışıyor!")
 
 def update_loop():
     global LATEST_DATA
     while True:
+        print("Güncelleme başlıyor...")
         try:
             data = fetch_bist_data()
             for his in data:
@@ -79,9 +81,9 @@ def update_loop():
                 if mesaj:
                     telegram_send(mesaj)
 
-            # Güncel veriyi güncelle
             with data_lock:
                 LATEST_DATA = {"status": "ok", "timestamp": int(time.time()), "data": data}
+            print("Güncelleme tamamlandı.")
         except Exception as e:
             print(f"update_loop hatası: {e}")
             with data_lock:
@@ -98,7 +100,9 @@ def api():
         return jsonify(LATEST_DATA)
 
 if __name__ == "__main__":
-    sistem_bildir()  # Sistem başlatıldığında bildirim gönder
-    threading.Thread(target=update_loop, daemon=True).start()  # Arka planda güncellemeleri başlat
-    start_self_ping()  # Kendi kendine ping
+    print("Uygulama başlatılıyor...")
+    sistem_bildir()  # Sistem aktif bildirimi
+    threading.Thread(target=update_loop, daemon=True).start()
+    start_self_ping()
+    print("Sunucu başlatılıyor...")
     app.run(host="0.0.0.0", port=10000)
