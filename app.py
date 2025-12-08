@@ -1,4 +1,5 @@
 from flask import Flask, jsonify, send_from_directory
+
 import threading
 import time
 from fetch_bist import fetch_bist_data
@@ -9,23 +10,22 @@ app = Flask(__name__)
 LATEST_DATA = {"status": "init", "data": None}
 data_lock = threading.Lock()
 
-# Telegram ayarları
-CHAT_IDS = [661794787]
+# Telegram ayarları - token ve chat ID
 TELEGRAM_TOKEN = "8588829956:AAEK2-wa75CoHQPjPFEAUU_LElRBduC-_TU"
+CHAT_ID = "661794787"  # Chat ID tek ise, string ya da int fark etmez
 
 def telegram_send(text):
-    for cid in CHAT_IDS:
-        try:
-            response = requests.post(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                json={"chat_id": cid, "text": text, "parse_mode": "HTML"}
-            )
-            if response.status_code == 200:
-                print(f"Telegram mesajı gönderildi: {text}")
-            else:
-                print(f"Telegram mesajı gönderilemedi: {response.text}")
-        except Exception as e:
-            print(f"Telegram gönderim hatası: {e}")
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
+        )
+        # Logla, mesaj gönderilip gönderilmediğini görebilirsin
+        print(f"Telegram gönderildi, durum: {response.status_code}")
+        if response.status_code != 200:
+            print(f"Hata: {response.text}")
+    except Exception as e:
+        print(f"Telegram gönderim hatası: {e}")
 
 def sistem_bildir():
     print("Sistem başlatılıyor ve bildirim gönderiliyor...")
@@ -86,6 +86,7 @@ def update_loop():
                 if mesaj:
                     telegram_send(mesaj)
 
+            # Güncel veriyi güncelle
             with data_lock:
                 LATEST_DATA = {"status": "ok", "timestamp": int(time.time()), "data": data}
             print("Güncelleme tamamlandı.")
