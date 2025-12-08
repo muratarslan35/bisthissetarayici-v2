@@ -1,6 +1,7 @@
 from flask import Flask, jsonify, send_from_directory
 import threading
 import time
+import os
 from fetch_bist import fetch_bist_data
 from self_ping import start_self_ping
 import requests
@@ -8,6 +9,9 @@ import requests
 app = Flask(__name__)
 LATEST_DATA = {"status": "init", "data": None}
 data_lock = threading.Lock()
+
+# Port ortam değişkenine göre ayarlanacak
+port = int(os.getenv("PORT", 10000))
 
 # Telegram ayarları
 TELEGRAM_TOKEN = "8588829956:AAEK2-wa75CoHQPjPFEAUU_LElRBduC-_TU"
@@ -109,4 +113,4 @@ if __name__ == "__main__":
     threading.Thread(target=update_loop, daemon=True).start()
     start_self_ping()
     print("Sunucu başlatılıyor...")
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=port)
