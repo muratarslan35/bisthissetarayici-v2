@@ -9,15 +9,16 @@ def get_tradingview_price(symbol):
     try:
         url = f"https://www.tradingview.com/symbols/{symbol}/"
         headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, headers=headers)
+        r = requests.get(url, headers=headers, timeout=5)
         if r.status_code != 200:
             return None
         soup = BeautifulSoup(r.text, "html.parser")
-        el = soup.find("div", {"class": "tv-symbol-price-quote__value"})
-        if el:
-            return float(el.text.replace(",", "").strip())
+        p = soup.find("div", {"class": "tv-symbol-price-quote__value"})
+        if p:
+            val = p.text.replace(",", "").replace("$", "").strip()
+            return float(val)
     except:
-        pass
+        return None
     return None
 
 def calculate_rsi(series, period=14):
@@ -40,58 +41,67 @@ def fetch_bist_data():
 
         current_price = df.iloc[-1]
         tv_price = get_tradingview_price(sym) or current_price
+        sapma_pct = ((tv_price - current_price) / current_price) * 100
+
         high = data["High"][sym].max()
         low = data["Low"][sym].min()
+
+        daily_change = high - low
 
         ma20 = df.rolling(20).mean().iloc[-1]
         ma50 = df.rolling(50).mean().iloc[-1]
         trend = "Yukarı" if ma20 > ma50 else "Aşağı"
 
         rsi_series = calculate_rsi(df)
-        rsi = rsi_series.iloc[-1] if not rsi_series.empty else None
+        rsi = rsi_series.iloc[-1]
 
-        # 3 tepe
-        def detect_three_peaks(close):
-            peaks = (close > close.shift(1)) & (close > close.shift(-1))
-            p = close[peaks].index
-            if len(p) < 3:
-                return False
-            last3 = close[p[-3:]]
-            if close.iloc[-1] > last3.max():
-                return True
-            return False
-
-        three_peak = detect_three_peaks(df)
-
-        # 11 ve 15 yeşil mum
         now = datetime.now()
 
-        def hour_green(h):
+        # Saat 11 ve 15 mumları
+        def green_at_hour(h):
             st = datetime.combine(now.date(), time(h, 0))
-            en = st + timedelta(hours=4)
-            part = df[(df.index >= st) & (df.index < en)]
-            if len(part) < 2:
+            et = st + timedelta(hours=4)
+            d = df[(df.index >= st) & (df.index < et)]
+            if len(d) < 2:
                 return False
-            return part.iloc[-1] > part.iloc[0]
+            return d.iloc[-1] > d.iloc[0]
 
-        green_11 = hour_green(11)
-        green_15 = hour_green(15)
+        green_11 = green_at_hour(11)
+        green_15 = green_at_hour(15)
 
-        last_signal = "AL" if (rsi and rsi < 20) else "SAT" if (rsi and rsi > 80) else "Yok"
+        # 3 tepe kırılımı
+        def three_peaks(close):
+            pk = (close > close.shift(1)) & (close > close.shift(-1))
+            p = close[pk].index
+            if len(p) < 3:
+                return False
+            last3 = p[-3:]
+            return close.iloc[-1] > close.loc[last3].max()
+
+        three_peak = three_peaks(df)
+
+        last_signal = "Yok"
+        if rsi < 20:
+            last_signal = "AL"
+        elif rsi > 80:
+            last_signal = "SAT"
 
         result.append({
             "symbol": sym,
             "current_price": current_price,
             "tv_price": tv_price,
-            "daily_change": high - low,
+            "sapma_pct": sapma_pct,
             "trend": trend,
+            "last_signal": last_signal,
+            "signal_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "daily_change": daily_change,
             "volume": data["Volume"][sym].iloc[-1],
             "RSI": rsi,
-            "three_peak_break": three_peak,
+            "support_break": False,
+            "resistance_break": False,
             "green_mum_11": green_11,
             "green_mum_15": green_15,
-            "last_signal": last_signal,
-            "signal_time": now.strftime("%Y-%m-%d %H:%M:%S")
+            "three_peak_break": three_peak
         })
 
     return result
