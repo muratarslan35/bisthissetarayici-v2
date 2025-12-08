@@ -8,11 +8,13 @@ def start_self_ping():
     interval = int(os.getenv('SELF_PING_INTERVAL', 300))
     if not url:
         return
+    
     def ping():
         while True:
             try:
                 requests.get(url)
-            except:
-                pass
+            except Exception as e:
+                print(f"Self ping hatası: {e}")
             time.sleep(interval)
+    
     threading.Thread(target=ping, daemon=True).start()
