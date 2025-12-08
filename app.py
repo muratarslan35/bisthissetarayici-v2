@@ -9,9 +9,9 @@ app = Flask(__name__)
 LATEST_DATA = {"status": "init", "data": None}
 data_lock = threading.Lock()
 
-# Telegram ayarları - token ve chat ID
+# Telegram ayarları (Token ve Chat ID)
 TELEGRAM_TOKEN = "8588829956:AAEK2-wa75CoHQPjPFEAUU_LElRBduC-_TU"
-CHAT_ID = "661794787"  # Chat ID tek ise, string ya da int fark etmez
+CHAT_ID = "661794787"  # Chat ID tek ise, string veya int fark etmez
 
 def telegram_send(text):
     try:
@@ -19,7 +19,6 @@ def telegram_send(text):
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             json={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
         )
-        # Logla, mesaj gönderilip gönderilmediğini görebilirsin
         print(f"Telegram gönderildi, durum: {response.status_code}")
         if response.status_code != 200:
             print(f"Hata: {response.text}")
