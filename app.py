@@ -16,10 +16,14 @@ TELEGRAM_TOKEN = "8588829956:AAEK2-wa75CoHQPjPFEAUU_LElRBduC-_TU"
 def telegram_send(text):
     for cid in CHAT_IDS:
         try:
-            requests.post(
+            response = requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                 json={"chat_id": cid, "text": text, "parse_mode": "HTML"}
             )
+            if response.status_code == 200:
+                print(f"Telegram mesajı gönderildi: {text}")
+            else:
+                print(f"Telegram mesajı gönderilemedi: {response.text}")
         except Exception as e:
             print(f"Telegram gönderim hatası: {e}")
 
@@ -33,6 +37,7 @@ def update_loop():
         print("Güncelleme başlıyor...")
         try:
             data = fetch_bist_data()
+            print("Veri çekildi, güncelleniyor...")
             for his in data:
                 mesaj = ""
                 rsi = his.get("RSI")
