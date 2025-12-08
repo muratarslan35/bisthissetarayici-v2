@@ -1,21 +1,16 @@
 import threading
 import time
 import requests
-import os
+
+PING_URL = "https://YOUR-RENDER-URL.onrender.com"
+
+def self_ping():
+    while True:
+        try:
+            requests.get(PING_URL, timeout=5)
+        except:
+            pass
+        time.sleep(250)  # Render uyku koruması
 
 def start_self_ping():
-    url = os.getenv("SELF_URL")
-    interval = int(os.getenv("SELF_PING_INTERVAL", 240))
-
-    if not url:
-        return
-
-    def loop():
-        while True:
-            try:
-                requests.get(url, timeout=5)
-            except:
-                pass
-            time.sleep(interval)
-
-    threading.Thread(target=loop, daemon=True).start()
+    threading.Thread(target=self_ping, daemon=True).start()
