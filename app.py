@@ -3,93 +3,111 @@ import threading
 import time
 import requests
 import os
+
 from fetch_bist import fetch_bist_data
 from self_ping import start_self_ping
 
 app = Flask(__name__)
+
 LATEST_DATA = {"status": "init", "data": None}
 data_lock = threading.Lock()
 
-# Telegram bildirimleri
+# ==============================
+# 📌 Telegram Ayarları
+# ==============================
+
 TELEGRAM_TOKEN = "8588829956:AAEK2-wa75CoHQPjPFEAUU_LElRBduC-_TU"
-CHAT_ID = 661794787
+
+# Birden fazla ID eklemek için liste halinde yaz
+TELEGRAM_CHAT_IDS = [
+    661794787,   # Senin ID
+    # 123456789, # Başka kişi eklemek istersen buraya ID ekle
+]
 
 def telegram_send(text):
-    for cid in [CHAT_ID]:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": cid, "text": text, "parse_mode": "HTML"}
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    for cid in TELEGRAM_CHAT_IDS:
         try:
-            requests.post(url, json=payload)
+            requests.post(url, json={
+                "chat_id": cid,
+                "text": text,
+                "parse_mode": "HTML"
+            })
         except:
             pass
 
+# Sistem açıldığında mesaj
 def sistem_bildir():
-    telegram_send("🤖 Sistem başlatıldı ve aktif!")
+    telegram_send("🤖 Sistem Render üzerinde başlatıldı ve aktif!")
+
+# ==============================
+# 📌 Veri Çekme Döngüsü
+# ==============================
 
 def update_loop():
     global LATEST_DATA
+
     while True:
         try:
             data = fetch_bist_data()
+
             for his in data:
-                rsi = his.get("RSI")
-                last_signal = his.get("last_signal")
-                support_break = his.get("support_break")
-                resistance_break = his.get("resistance_break")
-                green_11 = his.get("green_mum_11")
-                green_15 = his.get("green_mum_15")
-                three_peak = his.get("three_peak_break")
-                price = his.get("current_price")
-                daily_change = his.get("daily_change")
-                volume = his.get("volume")
-                trend = his.get("trend")
-                signal_time = his.get("signal_time")
+                msg = ""
 
-                mesaj = ""
+                symbol = his["symbol"]
+                rsi = his["RSI"]
+                last_signal = his["last_signal"]
 
+                # RSI MESAJLARI
                 if rsi is not None:
                     if rsi < 20:
-                        mesaj += f"🔻 {his['symbol']} RSI {rsi:.2f} < 20!\n"
+                        msg += f"🔻 {symbol} RSI {rsi:.2f} < 20\n"
                     elif rsi > 80:
-                        mesaj += f"🔺 {his['symbol']} RSI {rsi:.2f} > 80!\n"
+                        msg += f"🔺 {symbol} RSI {rsi:.2f} > 80\n"
 
+                # AL / SAT
                 if last_signal == "AL":
-                    mesaj += f"🟢 {his['symbol']} AL sinyali!\n"
+                    msg += f"🟢 {symbol} AL sinyali!\n"
                 elif last_signal == "SAT":
-                    mesaj += f"🔴 {his['symbol']} SAT sinyali!\n"
+                    msg += f"🔴 {symbol} SAT sinyali!\n"
 
-                if support_break:
-                    mesaj += f"🟢 {his['symbol']} destek kırıldı!\n"
-                if resistance_break:
-                    mesaj += f"🔴 {his['symbol']} direnç kırıldı!\n"
+                # 3 tepe kırılımı
+                if his["three_peak_break"]:
+                    msg += f"⚠️ {symbol} üç tepe kırılımı!\n"
 
-                if three_peak:
-                    mesaj += f"⚠️ {his['symbol']} üç tepe kırılımı gerçekleşti!\n"
+                # 11 ve 15 yeşil mum
+                if his["green_mum_11"]:
+                    msg += f"🟢 {symbol} 4H - 11:00 yeşil mum.\n"
+                if his["green_mum_15"]:
+                    msg += f"🟢 {symbol} 4H - 15:00 yeşil mum.\n"
 
-                if green_11:
-                    mesaj += f"🟢 {his['symbol']} 4H saat 11'de yeşil mum oluştu.\n"
-                if green_15:
-                    mesaj += f"🟢 {his['symbol']} 4H saat 15'te yeşil mum oluştu.\n"
+                # Fiyat bilgileri
+                msg += f"Fiyat: {his['current_price']} TL\n"
+                msg += f"Günlük değişim: {his['daily_change']}\n"
+                msg += f"Hacim: {his['volume']}\n"
+                msg += f"Trend: {his['trend']}\n"
+                msg += f"RSI: {rsi}\n"
+                msg += f"Sinyal zamanı: {his['signal_time']}\n"
 
-                mesaj += f"Fiyat: {price} TL\n"
-                mesaj += f"Günlük değişim: {daily_change}\n"
-                mesaj += f"Hacim: {volume}\n"
-                mesaj += f"Trend: {trend}\n"
-                mesaj += f"Son sinyal: {last_signal}\n"
-                mesaj += f"Sinyal zamanı: {signal_time}\n"
-                mesaj += f"RSI: {rsi}\n"
-
-                if mesaj:
-                    telegram_send(mesaj)
+                if msg.strip():
+                    telegram_send(msg)
 
             with data_lock:
-                LATEST_DATA = {"status": "ok", "timestamp": int(time.time()), "data": data}
+                LATEST_DATA = {
+                    "status": "ok",
+                    "timestamp": int(time.time()),
+                    "data": data
+                }
 
         except Exception as e:
             with data_lock:
                 LATEST_DATA = {"status": "error", "error": str(e)}
 
         time.sleep(60)
+
+# ==============================
+# 📌 ROUTES
+# ==============================
 
 @app.route("/")
 def dashboard():
@@ -100,10 +118,15 @@ def api():
     with data_lock:
         return jsonify(LATEST_DATA)
 
+# ==============================
+# 📌 MAIN
+# ==============================
+
 if __name__ == "__main__":
     sistem_bildir()
     threading.Thread(target=update_loop, daemon=True).start()
     start_self_ping()
 
-    # 🔥 Render'ın zorunlu port sistemi (en önemli satır)
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    # Render portu otomatik okur artık — kesin çözüm
+    port = int(os.getenv("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
