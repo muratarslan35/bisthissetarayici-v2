@@ -1,5 +1,4 @@
 from flask import Flask, jsonify, send_from_directory
-
 import threading
 import time
 from fetch_bist import fetch_bist_data
