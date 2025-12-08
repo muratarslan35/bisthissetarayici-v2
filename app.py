@@ -1,90 +1,83 @@
-import os
-import json
-from flask import Flask, jsonify, request, send_from_directory
-from flask_cors import CORS
+from flask import Flask, jsonify, send_from_directory
 import threading
 import time
+import requests
 from fetch_bist import fetch_bist_data
+from self_ping import start_self_ping
 
-app = Flask(__name__, static_folder="static")
-CORS(app)
+app = Flask(__name__)
+LATEST_DATA = {"status": "init", "data": None}
+data_lock = threading.Lock()
 
-# ---- GLOBAL CACHE ----
-last_bist_data = {
-    "XU100": None,
-    "XU030": None,
-    "last_update": None
-}
+# Telegram
+TELEGRAM_TOKEN = "8588829956:AAEK2-wa75CoHQPjPFEAUU_LElRBduC-_TU"
+CHAT_ID = 661794787
 
+def telegram_send(text):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
+    try:
+        requests.post(url, json=payload)
+    except:
+        pass
 
-# ===============================
-#   ROOT → dashboard.html
-# ===============================
+def sistem_bildir():
+    telegram_send("🤖 Sistem başlatıldı – BIST tarama aktif!")
+
+def update_loop():
+    global LATEST_DATA
+    while True:
+        try:
+            data = fetch_bist_data()
+
+            for h in data:
+                mesaj = ""
+
+                if h["RSI"] < 20:
+                    mesaj += f"🔻 {h['symbol']} RSI < 20!\n"
+                if h["RSI"] > 80:
+                    mesaj += f"🔺 {h['symbol']} RSI > 80!\n"
+
+                if h["last_signal"] == "AL":
+                    mesaj += f"🟢 {h['symbol']} AL sinyali!\n"
+                if h["last_signal"] == "SAT":
+                    mesaj += f"🔴 {h['symbol']} SAT sinyali!\n"
+
+                if h["green_mum_11"]:
+                    mesaj += f"🟢 11:00 yeşil mum!\n"
+                if h["green_mum_15"]:
+                    mesaj += f"🟢 15:00 yeşil mum!\n"
+
+                if mesaj:
+                    mesaj += (
+                        f"Fiyat: {h['current_price']} TL\n"
+                        f"Değişim: {h['daily_change']}\n"
+                        f"Hacim: {h['volume']}\n"
+                        f"Trend: {h['trend']}\n"
+                        f"Sinyal Zamanı: {h['signal_time']}"
+                    )
+                    telegram_send(mesaj)
+
+            with data_lock:
+                LATEST_DATA = {"status": "ok", "timestamp": int(time.time()), "data": data}
+
+        except Exception as e:
+            with data_lock:
+                LATEST_DATA = {"status": "error", "error": str(e)}
+
+        time.sleep(60)
+
 @app.route("/")
 def index():
     return send_from_directory("static", "dashboard.html")
 
+@app.route("/api")
+def api():
+    with data_lock:
+        return jsonify(LATEST_DATA)
 
-# ===============================
-#   API → BIST verileri
-# ===============================
-@app.route("/api/bist")
-def api_bist():
-    return jsonify(last_bist_data)
-
-
-# ===============================
-#   Manual Trigger
-# ===============================
-@app.route("/api/refresh", methods=["POST"])
-def manual_refresh():
-    global last_bist_data
-    last_bist_data = fetch_bist_data()
-    return jsonify({"status": "ok", "updated": last_bist_data})
-
-
-# ===============================
-#   Background Auto Updater
-# ===============================
-def background_updater():
-    global last_bist_data
-    while True:
-        try:
-            last_bist_data = fetch_bist_data()
-            print("BIST verileri güncellendi.")
-        except Exception as e:
-            print("Arka plan güncelleme hatası:", e)
-        time.sleep(60)  # her 1 dakikada bir çek
-
-
-# ===============================
-#   SELF-PING (Render Uyumluluğu)
-# ===============================
-def keep_alive():
-    while True:
-        try:
-            import requests
-            url = os.environ.get("RENDER_EXTERNAL_URL", None)
-            if url:
-                requests.get(url, timeout=5)
-                print("Self-ping gönderildi:", url)
-        except:
-            pass
-        time.sleep(250)  # 4 dakikada bir ping
-
-
-# ===============================
-#   APP START
-# ===============================
 if __name__ == "__main__":
-
-    # background fetcher
-    t1 = threading.Thread(target=background_updater, daemon=True)
-    t1.start()
-
-    # Render self-ping
-    t2 = threading.Thread(target=keep_alive, daemon=True)
-    t2.start()
-
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    sistem_bildir()
+    threading.Thread(target=update_loop, daemon=True).start()
+    start_self_ping()
+    app.run(host="0.0.0.0", port=10000)
