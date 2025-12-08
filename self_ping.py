@@ -1,18 +1,21 @@
-import threading 
+import threading
 import time
 import requests
 import os
 
 def start_self_ping():
-    url = os.getenv('SELF_URL')
-    interval = int(os.getenv('SELF_PING_INTERVAL', 300))
+    url = os.getenv("SELF_URL")
+    interval = int(os.getenv("SELF_PING_INTERVAL", 300))
+
     if not url:
         return
-    def ping_loop():
+
+    def loop():
         while True:
             try:
-                requests.get(url)
+                requests.get(url, timeout=10)
             except:
                 pass
             time.sleep(interval)
-    threading.Thread(target=ping_loop, daemon=True).start()
+
+    threading.Thread(target=loop, daemon=True).start()
