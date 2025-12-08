@@ -1,7 +1,6 @@
 Flask
-flask-cors
-gunicorn
-yfinance
-pandas
 requests
-schedule
+yfinance
+beautifulsoup4
+pandas
+numpy
