@@ -3,7 +3,6 @@ import threading
 import time
 import requests
 import os
-
 from fetch_bist import fetch_bist_data
 from self_ping import start_self_ping
 
@@ -12,38 +11,29 @@ app = Flask(__name__)
 LATEST_DATA = {"status": "init", "data": None}
 data_lock = threading.Lock()
 
-# ==============================
-# 📌 Telegram Ayarları
-# ==============================
-
+# --- Telegram ---
 TELEGRAM_TOKEN = "8588829956:AAEK2-wa75CoHQPjPFEAUU_LElRBduC-_TU"
 
-# Birden fazla ID eklemek için liste halinde yaz
-TELEGRAM_CHAT_IDS = [
-    661794787,   # Senin ID
-    # 123456789, # Başka kişi eklemek istersen buraya ID ekle
+# Birden fazla CHAT_ID ekleyebilirsin
+CHAT_IDS = [
+    661794787,   # Murat
+    # 123456789, # örnek kişi
+    # 987654321, # başka kişi
 ]
 
 def telegram_send(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    for cid in TELEGRAM_CHAT_IDS:
+    for cid in CHAT_IDS:
+        payload = {"chat_id": cid, "text": text, "parse_mode": "HTML"}
         try:
-            requests.post(url, json={
-                "chat_id": cid,
-                "text": text,
-                "parse_mode": "HTML"
-            })
+            requests.post(url, json=payload, timeout=5)
         except:
             pass
 
-# Sistem açıldığında mesaj
 def sistem_bildir():
-    telegram_send("🤖 Sistem Render üzerinde başlatıldı ve aktif!")
+    telegram_send("🤖 Sistem başlatıldı ve aktif!")
 
-# ==============================
-# 📌 Veri Çekme Döngüsü
-# ==============================
-
+# --- Veri Döngüsü ---
 def update_loop():
     global LATEST_DATA
 
@@ -51,6 +41,7 @@ def update_loop():
         try:
             data = fetch_bist_data()
 
+            # Her hisse için bildirim kontrolü
             for his in data:
                 msg = ""
 
@@ -58,40 +49,44 @@ def update_loop():
                 rsi = his["RSI"]
                 last_signal = his["last_signal"]
 
-                # RSI MESAJLARI
                 if rsi is not None:
                     if rsi < 20:
-                        msg += f"🔻 {symbol} RSI {rsi:.2f} < 20\n"
+                        msg += f"🔻 {symbol} RSI {rsi:.2f} < 20!\n"
                     elif rsi > 80:
-                        msg += f"🔺 {symbol} RSI {rsi:.2f} > 80\n"
+                        msg += f"🔺 {symbol} RSI {rsi:.2f} > 80!\n"
 
-                # AL / SAT
                 if last_signal == "AL":
                     msg += f"🟢 {symbol} AL sinyali!\n"
                 elif last_signal == "SAT":
                     msg += f"🔴 {symbol} SAT sinyali!\n"
 
-                # 3 tepe kırılımı
+                if his["support_break"]:
+                    msg += f"🟢 {symbol} destek kırıldı!\n"
+                if his["resistance_break"]:
+                    msg += f"🔴 {symbol} direnç kırıldı!\n"
+
                 if his["three_peak_break"]:
-                    msg += f"⚠️ {symbol} üç tepe kırılımı!\n"
+                    msg += f"⚠️ {symbol} üç tepe kırılımı gerçekleşti!\n"
 
-                # 11 ve 15 yeşil mum
                 if his["green_mum_11"]:
-                    msg += f"🟢 {symbol} 4H - 11:00 yeşil mum.\n"
+                    msg += f"🟢 {symbol} 4H saat 11 yeşil mum!\n"
                 if his["green_mum_15"]:
-                    msg += f"🟢 {symbol} 4H - 15:00 yeşil mum.\n"
+                    msg += f"🟢 {symbol} 4H saat 15 yeşil mum!\n"
 
-                # Fiyat bilgileri
-                msg += f"Fiyat: {his['current_price']} TL\n"
-                msg += f"Günlük değişim: {his['daily_change']}\n"
-                msg += f"Hacim: {his['volume']}\n"
-                msg += f"Trend: {his['trend']}\n"
-                msg += f"RSI: {rsi}\n"
-                msg += f"Sinyal zamanı: {his['signal_time']}\n"
+                # Ek bilgiler
+                msg += (
+                    f"Fiyat: {his['current_price']} TL\n"
+                    f"Günlük değişim: {his['daily_change']}\n"
+                    f"Hacim: {his['volume']}\n"
+                    f"Trend: {his['trend']}\n"
+                    f"Sinyal zamanı: {his['signal_time']}\n"
+                    f"RSI: {rsi}\n"
+                )
 
                 if msg.strip():
                     telegram_send(msg)
 
+            # GLOBAL GÜNCELLEME (önceki hatanın nedeni buydu)
             with data_lock:
                 LATEST_DATA = {
                     "status": "ok",
@@ -105,10 +100,6 @@ def update_loop():
 
         time.sleep(60)
 
-# ==============================
-# 📌 ROUTES
-# ==============================
-
 @app.route("/")
 def dashboard():
     return send_from_directory("static", "dashboard.html")
@@ -118,15 +109,8 @@ def api():
     with data_lock:
         return jsonify(LATEST_DATA)
 
-# ==============================
-# 📌 MAIN
-# ==============================
-
 if __name__ == "__main__":
     sistem_bildir()
     threading.Thread(target=update_loop, daemon=True).start()
     start_self_ping()
-
-    # Render portu otomatik okur artık — kesin çözüm
-    port = int(os.getenv("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
