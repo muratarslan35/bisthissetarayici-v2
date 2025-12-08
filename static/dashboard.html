@@ -1,48 +1,113 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
-    <meta charset="UTF-8" />
-    <title>BIST Dashboard</title>
-    <style>
-        body { font-family: Arial; padding: 30px; background: #111; color: #fff; }
-        .box { padding: 20px; margin-bottom: 20px; background: #222; border-radius: 10px; }
-        h2 { color: #4CAF50; }
-    </style>
+<meta charset="UTF-8" />
+<title>BIST Dashboard</title>
+<style>
+    body {
+        font-family: 'Arial', sans-serif;
+        background-color: #121212;
+        color: #fff;
+        margin: 0;
+        padding: 20px;
+    }
+
+    h1 {
+        text-align: center;
+        margin-bottom: 30px;
+        font-size: 2.5em;
+        color: #4CAF50;
+    }
+
+    /* Ana container, grid düzeni */
+    .container {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 20px;
+    }
+
+    /* Her box’un stili */
+    .box {
+        background: #222;
+        padding: 20px;
+        border-radius: 15px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    /* Hover efekti */
+    .box:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+    }
+
+    /* Başlık stili */
+    .box h2 {
+        margin-top: 0;
+        color: #4CAF50;
+        font-size: 1.5em;
+        margin-bottom: 15px;
+        border-bottom: 2px solid #4CAF50;
+        padding-bottom: 5px;
+    }
+
+    /* Veri satırları */
+    #b30, #b100 {
+        font-size: 1.2em;
+        line-height: 1.5;
+    }
+
+    /* Renkli durum göstergeleri (opsiyonel) */
+    /* Örneğin, trend veya sinyal durumu renkleri */
+    .positive { color: #4CAF50; }
+    .negative { color: #e53935; }
+</style>
 </head>
 <body>
 
-<h1>BIST Dashboard</h1>
+<h1>BIST Güncel Veriler</h1>
 
-<div class="box">
-    <h2>BIST 30</h2>
-    <p id="b30">Yükleniyor...</p>
-</div>
-
-<div class="box">
-    <h2>BIST 100</h2>
-    <p id="b100">Yükleniyor...</p>
+<div class="container">
+    <div class="box">
+        <h2>BIST 30</h2>
+        <p id="b30">Yükleniyor...</p>
+    </div>
+    <div class="box">
+        <h2>BIST 100</h2>
+        <p id="b100">Yükleniyor...</p>
+    </div>
+    <!-- İstersen burada başka boxlar veya detaylar eklenebilir -->
 </div>
 
 <script>
-    async function loadData() {
-        try {
-            const res = await fetch("/api");
-            const json = await res.json();
-
-            if (json.status === "ok" && json.data) {
-                document.getElementById("b30").innerText = json.data.BIST30 ?? "Veri yok";
-                document.getElementById("b100").innerText = json.data.BIST100 ?? "Veri yok";
-            } else {
-                document.getElementById("b30").innerText = "Hata";
-                document.getElementById("b100").innerText = "Hata";
-            }
-        } catch (e) {
-            console.log("API hatası:", e);
+async function loadData() {
+    try {
+        const res = await fetch("/api");
+        const json = await res.json();
+        if (json.status === "ok" && json.data) {
+            document.getElementById("b30").innerHTML = `
+                <strong>Fiyat:</strong> ${json.data.BIST30} <br>
+                <strong>Trend:</strong> ${json.data.trend30 || 'N/A'} <br>
+                <strong>Sinyal:</strong> ${json.data.signal30 || 'Yok'}
+            `;
+            document.getElementById("b100").innerHTML = `
+                <strong>Fiyat:</strong> ${json.data.BIST100} <br>
+                <strong>Trend:</strong> ${json.data.trend100 || 'N/A'} <br>
+                <strong>Sinyal:</strong> ${json.data.signal100 || 'Yok'}
+            `;
+        } else {
+            document.getElementById("b30").innerText = "Veri alınamadı";
+            document.getElementById("b100").innerText = "Veri alınamadı";
         }
+    } catch (e) {
+        console.log("API hatası:", e);
+        document.getElementById("b30").innerText = "Hata";
+        document.getElementById("b100").innerText = "Hata";
     }
+}
 
-    loadData();
-    setInterval(loadData, 60000);
+loadData();
+setInterval(loadData, 60000);
 </script>
 
 </body>
