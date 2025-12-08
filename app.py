@@ -9,7 +9,7 @@ app = Flask(__name__)
 LATEST_DATA = {"status": "init", "data": None}
 data_lock = threading.Lock()
 
-# Telegram ayarları (Token ve Chat ID)
+# Telegram ayarları
 TELEGRAM_TOKEN = "8588829956:AAEK2-wa75CoHQPjPFEAUU_LElRBduC-_TU"
 CHAT_ID = "661794787"  # Chat ID tek ise, string veya int fark etmez
 
