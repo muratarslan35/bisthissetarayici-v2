@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
-    <meta charset="UTF-8">
+    <meta charset="UTF-8" />
     <title>BIST Dashboard</title>
     <style>
         body { font-family: Arial; padding: 30px; background: #111; color: #fff; }
@@ -26,11 +26,16 @@
 <script>
     async function loadData() {
         try {
-            const res = await fetch("/bist");
-            const data = await res.json();
+            const res = await fetch("/api");
+            const json = await res.json();
 
-            document.getElementById("b30").innerText = data.BIST30 ?? "Veri yok";
-            document.getElementById("b100").innerText = data.BIST100 ?? "Veri yok";
+            if (json.status === "ok" && json.data) {
+                document.getElementById("b30").innerText = json.data.BIST30 ?? "Veri yok";
+                document.getElementById("b100").innerText = json.data.BIST100 ?? "Veri yok";
+            } else {
+                document.getElementById("b30").innerText = "Hata";
+                document.getElementById("b100").innerText = "Hata";
+            }
         } catch (e) {
             console.log("API hatası:", e);
         }
