@@ -16,12 +16,11 @@ TELEGRAM_TOKEN = "8588829956:AAEK2-wa75CoHQPjPFEAUU_LElRBduC-_TU"
 
 CHAT_IDS = [
     661794787,
-    # buraya başka kullanıcı ID ekleyebilirsin: 1234567, 99887766
+    # buraya başka kullanıcı ID ekleyebilirsin
 ]
 
 def telegram_send(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-
     for cid in CHAT_IDS:
         try:
             requests.post(url, json={"chat_id": cid, "text": text}, timeout=5)
@@ -29,9 +28,9 @@ def telegram_send(text):
             pass
 
 
-# -----------------------------
-# ANA DÖNGÜ
-# -----------------------------
+# ========================
+#     BACKGROUND-LOOP
+# ========================
 def update_loop():
     global LATEST_DATA
 
@@ -41,7 +40,7 @@ def update_loop():
         try:
             data = fetch_bist_data()
 
-            # TELEGRAM SİNYALLERİ
+            # TELEGRAM SİNYAL
             for his in data:
                 rsi = his.get("RSI")
                 last_signal = his.get("last_signal")
@@ -76,23 +75,26 @@ def update_loop():
         time.sleep(60)
 
 
-# -----------------------------
-# FLASK BAŞLANGIÇ TRIGGER
-# -----------------------------
-started = False
 
-@app.before_first_request
-def activate_background_jobs():
-    global started
-    if not started:
-        started = True
-        threading.Thread(target=update_loop, daemon=True).start()
-        start_self_ping()
+# ==========================
+#    THREAD AUTO START
+# ==========================
+# Flask 3 ile "before_first_request" yok, bu yüzden burada başlatıyoruz
+
+def start_background_threads_once():
+    """Gunicorn worker açıldığı anda çağırılacak."""
+    threading.Thread(target=update_loop, daemon=True).start()
+    start_self_ping()
 
 
-# -----------------------------
-# ROUTES
-# -----------------------------
+# Bu fonksiyon Flask import edildiğinde 1 kere çalışır
+start_background_threads_once()
+
+
+
+# ==========================
+#       ROUTES
+# ==========================
 @app.route("/")
 def dashboard():
     return send_from_directory("static", "dashboard.html")
