@@ -1,78 +1,76 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8">
+  <meta charset="utf-8"/>
   <title>BIST Tarayıcı Dashboard</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
-    body{font-family:Inter,system-ui,Segoe UI,Arial; margin:12px; color:#111;}
-    h1{margin-bottom:8px;}
-    table{width:100%;border-collapse:collapse;}
-    th,td{padding:8px;border:1px solid #e6e6e6;text-align:left;font-size:13px;}
-    th{background:#f7f7f7;position:sticky;top:0;}
-    .small{font-size:12px;color:#666;}
-    .ok{background:#e6ffed;}
-    .warn{background:#fff7e6;}
-    .bad{background:#ffe6e6;}
-    #last {margin-bottom:12px;color:#333;}
+    body { font-family: Arial, Helvetica, sans-serif; margin: 16px; background:#f7f7f7; }
+    table { border-collapse: collapse; width: 100%; background: white; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 13px; }
+    th { background: #333; color: #fff; position: sticky; top: 0; z-index: 2; }
+    tr:nth-child(even){background:#f2f2f2;}
+    .small { font-size: 12px; color:#666; }
+    .badge { padding: 2px 6px; border-radius: 4px; color: #fff; font-weight: bold; }
+    .green { background: #2ecc71; }
+    .red { background: #e74c3c; }
+    .blue { background: #3498db; }
   </style>
 </head>
 <body>
-  <h1>BIST Tarayıcı</h1>
-  <div id="last" class="small">Veri bekleniyor...</div>
+  <h2>BIST Tarayıcı Dashboard</h2>
+  <div class="small">Veri güncellemesi: <span id="ts">-</span></div>
   <table id="tbl">
     <thead>
       <tr>
         <th>Symbol</th>
         <th>Fiyat</th>
         <th>RSI</th>
-        <th>Sinyal</th>
         <th>Trend</th>
-        <th>MA Kırılımları</th>
-        <th>Günlük %</th>
+        <th>Günlük</th>
         <th>Hacim</th>
-        <th>Zaman</th>
+        <th>Sinyal</th>
+        <th>MA Kırılımları</th>
+        <th>Diğer</th>
       </tr>
     </thead>
     <tbody id="body"></tbody>
   </table>
 
-<script>
-async function fetchAndRender(){
-  try{
-    const res = await fetch('/api');
-    const js = await res.json();
-    const body = document.getElementById('body');
-    body.innerHTML = '';
-    if(js.status !== 'ok' || !js.data){
-      document.getElementById('last').innerText = 'API durumu: ' + js.status;
-      return;
+  <script>
+    async function load() {
+      try {
+        const res = await fetch('/api');
+        const data = await res.json();
+        document.getElementById('ts').innerText = new Date((data.timestamp||0)*1000).toLocaleString();
+        const body = document.getElementById('body');
+        body.innerHTML = '';
+        const rows = (data.data||[]);
+        rows.forEach(r=>{
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${r.symbol}</td>
+            <td>${r.current_price}</td>
+            <td>${r.RSI ? r.RSI.toFixed(2) : '-'}</td>
+            <td>${r.trend}</td>
+            <td>${r.daily_change}</td>
+            <td>${r.volume||'-'}</td>
+            <td>${r.last_signal || '-'}</td>
+            <td>${Object.entries(r.ma_breaks || {}).filter(x=>x[1]).map(x=>x[0]).join(', ') || '-'}</td>
+            <td>
+              ${r.support_break ? '<span class="badge green">Destek Kırıldı</span>' : ''}
+              ${r.resistance_break ? '<span class="badge red">Direnç Kırıldı</span>' : ''}
+              ${r.three_peak_break ? '<span class="badge blue">3 Tepe</span>' : ''}
+            </td>
+          `;
+          body.appendChild(tr);
+        });
+      } catch (e) {
+        console.error(e);
+      }
     }
-    document.getElementById('last').innerText = 'Güncelleme: ' + new Date(js.timestamp*1000).toLocaleString();
-    js.data.forEach(item=>{
-      const tr = document.createElement('tr');
-      const ma_breaks = item.ma_breaks || {};
-      let maText = Object.entries(ma_breaks).filter(([k,v])=>v).map(([k])=>k).join(', ') || '-';
-      let rsiClass = item.RSI !== null ? (item.RSI < 25 ? 'ok' : (item.RSI>75 ? 'bad' : '')) : '';
-      tr.innerHTML = `
-        <td>${item.symbol}</td>
-        <td>${item.current_price ?? '-'}</td>
-        <td class="${rsiClass}">${item.RSI ?? '-'}</td>
-        <td>${item.last_signal ?? '-'}</td>
-        <td>${item.trend ?? '-'}</td>
-        <td>${maText}</td>
-        <td>${item.daily_change ?? '-'}</td>
-        <td>${item.volume ?? '-'}</td>
-        <td>${item.signal_time ?? '-'}</td>
-      `;
-      body.appendChild(tr);
-    });
-  }catch(err){
-    document.getElementById('last').innerText = 'Hata: ' + err;
-  }
-}
-fetchAndRender();
-setInterval(fetchAndRender, 60*1000);
-</script>
+
+    load();
+    setInterval(load, 60*1000); // 60s
+  </script>
 </body>
 </html>
