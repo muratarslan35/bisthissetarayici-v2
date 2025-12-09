@@ -1,114 +1,55 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
-<meta charset="UTF-8" />
-<title>BIST Dashboard</title>
+<meta charset="UTF-8">
+<title>BIST Tarayıcı Dashboard</title>
 <style>
-    body {
-        font-family: 'Arial', sans-serif;
-        background-color: #121212;
-        color: #fff;
-        margin: 0;
-        padding: 20px;
-    }
-
-    h1 {
-        text-align: center;
-        margin-bottom: 30px;
-        font-size: 2.5em;
-        color: #4CAF50;
-    }
-
-    /* Ana container, grid düzeni */
-    .container {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-        gap: 20px;
-    }
-
-    /* Her box’un stili */
-    .box {
-        background: #222;
-        padding: 20px;
-        border-radius: 15px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-        transition: transform 0.2s, box-shadow 0.2s;
-    }
-
-    /* Hover efekti */
-    .box:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 8px 20px rgba(0,0,0,0.4);
-    }
-
-    /* Başlık stili */
-    .box h2 {
-        margin-top: 0;
-        color: #4CAF50;
-        font-size: 1.5em;
-        margin-bottom: 15px;
-        border-bottom: 2px solid #4CAF50;
-        padding-bottom: 5px;
-    }
-
-    /* Veri satırları */
-    #b30, #b100 {
-        font-size: 1.2em;
-        line-height: 1.5;
-    }
-
-    /* Renkli durum göstergeleri (opsiyonel) */
-    /* Örneğin, trend veya sinyal durumu renkleri */
-    .positive { color: #4CAF50; }
-    .negative { color: #e53935; }
+body { font-family: Arial; background:#f2f2f2; }
+table { width: 100%; border-collapse: collapse; background:white; }
+th, td { padding: 8px; border: 1px solid #ddd; text-align: center; }
+th { background: #333; color:white; }
 </style>
-</head>
-<body>
-
-<h1>BIST Güncel Veriler</h1>
-
-<div class="container">
-    <div class="box">
-        <h2>BIST 30</h2>
-        <p id="b30">Yükleniyor...</p>
-    </div>
-    <div class="box">
-        <h2>BIST 100</h2>
-        <p id="b100">Yükleniyor...</p>
-    </div>
-    <!-- İstersen burada başka boxlar veya detaylar eklenebilir -->
-</div>
-
 <script>
 async function loadData() {
-    try {
-        const res = await fetch("/api");
-        const json = await res.json();
-        if (json.status === "ok" && json.data) {
-            document.getElementById("b30").innerHTML = `
-                <strong>Fiyat:</strong> ${json.data.BIST30} <br>
-                <strong>Trend:</strong> ${json.data.trend30 || 'N/A'} <br>
-                <strong>Sinyal:</strong> ${json.data.signal30 || 'Yok'}
-            `;
-            document.getElementById("b100").innerHTML = `
-                <strong>Fiyat:</strong> ${json.data.BIST100} <br>
-                <strong>Trend:</strong> ${json.data.trend100 || 'N/A'} <br>
-                <strong>Sinyal:</strong> ${json.data.signal100 || 'Yok'}
-            `;
-        } else {
-            document.getElementById("b30").innerText = "Veri alınamadı";
-            document.getElementById("b100").innerText = "Veri alınamadı";
-        }
-    } catch (e) {
-        console.log("API hatası:", e);
-        document.getElementById("b30").innerText = "Hata";
-        document.getElementById("b100").innerText = "Hata";
-    }
+    let res = await fetch("/api");
+    let js = await res.json();
+
+    let html = "";
+    js.data.forEach(row => {
+        html += `
+        <tr>
+            <td>${row.symbol}</td>
+            <td>${row.current_price}</td>
+            <td>${row.RSI}</td>
+            <td>${row.last_signal}</td>
+            <td>${row.daily_change}</td>
+            <td>${row.volume}</td>
+            <td>${row.trend}</td>
+            <td>${row.signal_time}</td>
+        </tr>`;
+    });
+
+    document.getElementById("rows").innerHTML = html;
 }
-
-loadData();
-setInterval(loadData, 60000);
+setInterval(loadData, 10000);
 </script>
+</head>
 
+<body onload="loadData()">
+
+<h2>BIST Tarayıcı Dashboard</h2>
+<table>
+<tr>
+<th>Hisse</th>
+<th>Fiyat</th>
+<th>RSI</th>
+<th>Sinyal</th>
+<th>Günlük Değ.</th>
+<th>Hacim</th>
+<th>Trend</th>
+<th>Zaman</th>
+</tr>
+<tbody id="rows"></tbody>
+</table>
 </body>
 </html>
