@@ -1,41 +1,50 @@
-from datetime import datetime
-from zoneinfo import ZoneInfo
+# signal_engine.py
+from utils import tr_now, should_send
+import requests
+import json
+import datetime
 
-TZ = ZoneInfo("Europe/Istanbul")
+TELEGRAM_TOKEN = "<TOKENIN>"
+CHAT_ID = "<CHAT_ID>"
 
-def tz_now():
-    return datetime.now(TZ)
+def send_telegram(msg):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    requests.post(url, json={"chat_id": CHAT_ID, "text": msg})
 
-def complex_daily_4h_logic(daily_df, h4_df):
-    """
-    daily_df: günlük periyot (pandas Series/DF with Open/Close)
-    h4_df: 4H periyot (pandas Series/DF)
-    Return True/False if complex condition met:
-    - bugünkü günlük mum içinde 'ilk yeşil' (evet) ve 4H içinde art arda 2. yeşil gelirse vb...
-    Bu fonksiyon bir örnek; fetch_bist içinde çağrılmak üzere hazırlandı.
-    """
-    try:
-        # Basit örnek: günlükde sondan 2. bar yeşil (yesterday green) ve bugünkü bar da yeşil -> True
-        if daily_df is None or h4_df is None:
-            return False
-        # günlük open/close serileri varsa
-        if "Open" in daily_df.columns and "Close" in daily_df.columns:
-            today = daily_df.iloc[-1]
-            prev = daily_df.iloc[-2] if len(daily_df) >= 2 else None
-            today_green = today["Close"] > today["Open"]
-            prev_green = prev is not None and prev["Close"] > prev["Open"]
-        else:
-            return False
+def check_signals(data):
+    triggered = []
 
-        # 4h içinde en son 2 barın yeşil olup olmadığı
-        if "Open" in h4_df.columns and "Close" in h4_df.columns:
-            last2 = h4_df.iloc[-2:]
-            green_count = sum((last2["Close"] > last2["Open"]).tolist())
-            fourh_condition = green_count >= 2
-        else:
-            fourh_condition = False
+    for d in data:
+        sym = d["symbol"]
 
-        # Örnek mantık:
-        return (prev_green and today_green and fourh_condition) or (today_green and fourh_condition)
-    except Exception:
-        return False
+        # RSI
+        if d["RSI"] < 20 and should_send(sym, "rsi_low"):
+            triggered.append((sym, "RSI < 20"))
+        if d["RSI"] > 80 and should_send(sym, "rsi_high"):
+            triggered.append((sym, "RSI > 80"))
+
+        # Destek kırılım
+        if d["support_break"] and should_send(sym, "support_break"):
+            triggered.append((sym, "Destek Kırılımı"))
+
+        # Direnç kırılım
+        if d["resistance_break"] and should_send(sym, "resistance_break"):
+            triggered.append((sym, "Direnç Kırılımı"))
+
+        # 3 tepe
+        if d["three_peak_break"] and should_send(sym, "three_peak"):
+            triggered.append((sym, "Üç Tepe Formasyonu Kırıldı"))
+
+        # 11 yeşil
+        if d["green_mum_11"] and should_send(sym, "green11"):
+            triggered.append((sym, "11:00 Yeşil Mum"))
+
+        # 15 yeşil
+        if d["green_mum_15"] and should_send(sym, "green15"):
+            triggered.append((sym, "15:00 Yeşil Mum"))
+
+    # Telegram gönder
+    for sym, text in triggered:
+        send_telegram(f"🟢 {sym} — {text}\nSinyal zamanı (TR): {tr_now()}")
+
+    return triggered
