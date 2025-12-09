@@ -1,41 +1,50 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html>
 <head>
-<meta charset="UTF-8">
-<title>BIST Algo Dashboard</title>
-<style>
-body { font-family: Arial; background:#f2f2f2; padding:20px; }
-.card { background:white; padding:15px; margin:10px; border-radius:10px; }
-</style>
+    <meta charset="UTF-8">
+    <title>BIST Tarayıcı Dashboard</title>
+    <style>
+        body { font-family: Arial; padding: 20px; background: #f2f2f2; }
+        table { width: 100%; border-collapse: collapse; background: white; }
+        th, td { padding: 8px; border: 1px solid #ccc; text-align: center; }
+        th { background: #333; color: white; }
+        tr:nth-child(even) { background: #f9f9f9; }
+    </style>
 </head>
 <body>
-
-<h2>BIST Algo Dashboard</h2>
-<div id="icerik"></div>
+    <h2>BIST Tarayıcı — Canlı Veri</h2>
+    <table id="tb"></table>
 
 <script>
-function yukle(){
-    fetch("/api").then(r=>r.json()).then(j=>{
-        let html="";
-        if(j.data){
-            j.data.forEach(x=>{
-                html+=`
-                    <div class="card">
-                    <b>${x.symbol}</b><br>
-                    Fiyat: ${x.current_price}<br>
-                    RSI: ${x.RSI}<br>
-                    Trend: ${x.trend}<br>
-                    Sinyal: ${x.last_signal}<br>
-                    Günlük: ${x.daily_change}<br>
-                    Hacim: ${x.volume}<br>
-                    </div>`;
-            });
-            document.getElementById("icerik").innerHTML = html;
-        }
-    })
+async function load() {
+    let r = await fetch("/api");
+    let js = await r.json();
+
+    let tb = document.getElementById("tb");
+    tb.innerHTML = `
+        <tr>
+            <th>Hisse</th><th>Fiyat</th><th>RSI</th><th>Sinyal</th>
+            <th>Trend</th><th>Günlük</th><th>Hacim</th><th>Saat</th>
+        </tr>
+    `;
+
+    for (let h of js.data || []) {
+        tb.innerHTML += `
+            <tr>
+                <td>${h.symbol}</td>
+                <td>${h.current_price}</td>
+                <td>${h.RSI}</td>
+                <td>${h.last_signal}</td>
+                <td>${h.trend}</td>
+                <td>${h.daily_change}</td>
+                <td>${h.volume}</td>
+                <td>${h.signal_time}</td>
+            </tr>
+        `;
+    }
 }
-setInterval(yukle, 60000);
-yukle();
+setInterval(load, 5000);
+load();
 </script>
 
 </body>
