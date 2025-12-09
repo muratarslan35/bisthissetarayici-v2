@@ -2,54 +2,41 @@
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
-<title>BIST Tarayıcı Dashboard</title>
+<title>BIST Algo Dashboard</title>
 <style>
-body { font-family: Arial; background:#f2f2f2; }
-table { width: 100%; border-collapse: collapse; background:white; }
-th, td { padding: 8px; border: 1px solid #ddd; text-align: center; }
-th { background: #333; color:white; }
+body { font-family: Arial; background:#f2f2f2; padding:20px; }
+.card { background:white; padding:15px; margin:10px; border-radius:10px; }
 </style>
-<script>
-async function loadData() {
-    let res = await fetch("/api");
-    let js = await res.json();
-
-    let html = "";
-    js.data.forEach(row => {
-        html += `
-        <tr>
-            <td>${row.symbol}</td>
-            <td>${row.current_price}</td>
-            <td>${row.RSI}</td>
-            <td>${row.last_signal}</td>
-            <td>${row.daily_change}</td>
-            <td>${row.volume}</td>
-            <td>${row.trend}</td>
-            <td>${row.signal_time}</td>
-        </tr>`;
-    });
-
-    document.getElementById("rows").innerHTML = html;
-}
-setInterval(loadData, 10000);
-</script>
 </head>
+<body>
 
-<body onload="loadData()">
+<h2>BIST Algo Dashboard</h2>
+<div id="icerik"></div>
 
-<h2>BIST Tarayıcı Dashboard</h2>
-<table>
-<tr>
-<th>Hisse</th>
-<th>Fiyat</th>
-<th>RSI</th>
-<th>Sinyal</th>
-<th>Günlük Değ.</th>
-<th>Hacim</th>
-<th>Trend</th>
-<th>Zaman</th>
-</tr>
-<tbody id="rows"></tbody>
-</table>
+<script>
+function yukle(){
+    fetch("/api").then(r=>r.json()).then(j=>{
+        let html="";
+        if(j.data){
+            j.data.forEach(x=>{
+                html+=`
+                    <div class="card">
+                    <b>${x.symbol}</b><br>
+                    Fiyat: ${x.current_price}<br>
+                    RSI: ${x.RSI}<br>
+                    Trend: ${x.trend}<br>
+                    Sinyal: ${x.last_signal}<br>
+                    Günlük: ${x.daily_change}<br>
+                    Hacim: ${x.volume}<br>
+                    </div>`;
+            });
+            document.getElementById("icerik").innerHTML = html;
+        }
+    })
+}
+setInterval(yukle, 60000);
+yukle();
+</script>
+
 </body>
 </html>
