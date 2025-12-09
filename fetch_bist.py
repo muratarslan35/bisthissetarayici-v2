@@ -4,178 +4,165 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, time
 import os
-import math
+import traceback
 
 # --- BIST30 + BIST100 Hisselerini Otomatik Çeken Fonksiyon ---
 def get_bist_symbols():
     """
-    Tries to fetch BIST30 and BIST100 components from i̇ş yatrım (public API used before).
-    Returns list of symbols formatted for yfinance (e.g. 'GARAN.IS').
+    Önce isyatirim API'sini dene; başarısızsa fallback olarak küçük bir güvenli liste döndür.
     """
     try:
         url = "https://api.isyatirim.com.tr/index/indexsectorperformance"
-        resp = requests.get(url, timeout=8)
-        resp.raise_for_status()
-        js = resp.json()
-        bist30 = []
-        bist100 = []
-        for item in js:
-            code = item.get("indexCode", "")
-            if code == "XU030":
-                # item["components"] expected list of dicts with "symbol"
-                bist30 = [x["symbol"] + ".IS" for x in item.get("components", []) if x.get("symbol")]
-            if code == "XU100":
-                bist100 = [x["symbol"] + ".IS" for x in item.get("components", []) if x.get("symbol")]
-        symbols = list(dict.fromkeys(bist30 + bist100))  # preserve order, unique
-        if not symbols:
-            raise Exception("Empty components from isyatirim API")
-        return symbols
+        r = requests.get(url, timeout=5)
+        if r.status_code == 200:
+            js = r.json()
+            bist30 = []
+            bist100 = []
+            for item in js:
+                idx = item.get("indexCode")
+                comps = item.get("components") or []
+                if idx == "XU030":
+                    bist30 = [x["symbol"] + ".IS" for x in comps]
+                if idx == "XU100":
+                    bist100 = [x["symbol"] + ".IS" for x in comps]
+            merged = list(dict.fromkeys((bist30 or []) + (bist100 or [])))
+            if merged:
+                return merged
     except Exception as e:
-        # fallback: small hardcoded list or read from a cached file if needed
-        # return a small safe default to avoid total failure
-        print("get_bist_symbols fallback:", e)
-        fallback = [
-            # some common symbols as fallback
-            "GARAN.IS","AKBNK.IS","YKBNK.IS","ASELS.IS","THYAO.IS"
-        ]
-        return fallback
+        # Loglama çağıran taraf yapacak; burada sadece fallback ver
+        pass
 
-# RSI calculation
-def rsi(df_close, period=14):
-    delta = df_close.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.rolling(window=period, min_periods=period).mean()
-    avg_loss = loss.rolling(window=period, min_periods=period).mean()
-    rs = avg_gain / avg_loss
-    rsi_series = 100 - (100 / (1 + rs))
-    return rsi_series
+    # Alternatif: küçük güvenli fallback (popülerler) — uygulama çalışırken bunu genişletebilirsin
+    fallback = ["GARAN.IS","AKBNK.IS","YKBNK.IS","ISCTR.IS","THYAO.IS","ASELS.IS","KCHOL.IS","KRDMD.IS"]
+    return fallback
 
-def detect_three_peaks(series):
-    # simple local peak detection, requires at least 3 local peaks and current price > max of last 3 peaks
-    if series.empty or len(series) < 5:
+
+# ---- Teknik analiz hesaplamaları ----
+def calc_rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    avg_gain = gain.rolling(window=period, min_periods=1).mean()
+    avg_loss = loss.rolling(window=period, min_periods=1).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+    rsi = rsi.fillna(50)  # NaN olanlar için nötr değer
+    return rsi
+
+
+def detect_three_peaks(df_close):
+    try:
+        peaks_idx = (df_close > df_close.shift(1)) & (df_close > df_close.shift(-1))
+        peaks_times = df_close[peaks_idx].index
+        if len(peaks_times) < 3:
+            return False
+        last_three = peaks_times[-3:]
+        max_peak = df_close.loc[last_three].max()
+        current_price = df_close.iloc[-1]
+        return current_price > max_peak
+    except Exception:
         return False
-    peaks = (series > series.shift(1)) & (series > series.shift(-1))
-    peak_idx = series[peaks].index
-    if len(peak_idx) < 3:
-        return False
-    last_three = peak_idx[-3:]
-    max_peak = series.loc[last_three].max()
-    current_price = series.iloc[-1]
-    return current_price > max_peak
 
-def detect_ma_breaks(df, price):
-    """
-    Check crossing of price over MA20/50/100/200 comparing previous close to previous MA and current.
-    Returns dict {'MA-20': True/False, ...}
-    """
-    ma_breaks = {}
-    mas = {"MA-20": 20, "MA-50": 50, "MA-100": 100, "MA-200": 200}
-    for label, window in mas.items():
-        if len(df["Close"]) < window+1:
-            ma_breaks[label] = False
-            continue
-        ma = df["Close"].rolling(window=window).mean()
-        prev_close = df["Close"].iloc[-2]
-        prev_ma = ma.iloc[-2]
-        curr_close = price
-        curr_ma = ma.iloc[-1]
-        # Break if previously below MA and now above MA (cross up) or vice versa
-        crossed_up = (prev_close <= prev_ma) and (curr_close > curr_ma)
-        crossed_down = (prev_close >= prev_ma) and (curr_close < curr_ma)
-        ma_breaks[label] = crossed_up or crossed_down
-    return ma_breaks
 
-def fetch_bist_data():
-    symbols = get_bist_symbols()
+def detect_ma_breaks(df_close):
+    """
+    Returns dict like {"MA20": True/False, "MA50": ..., "MA100":..., "MA200":...}
+    Detect if price crosses above last MA (simple check).
+    """
+    res = {}
+    for window in [20, 50, 100, 200]:
+        if len(df_close) >= window:
+            ma = df_close.rolling(window=window).mean().iloc[-1]
+            prev_ma = df_close.rolling(window=window).mean().iloc[-2] if len(df_close) >= window+1 else ma
+            current = df_close.iloc[-1]
+            prev_close = df_close.iloc[-2] if len(df_close) >= 2 else df_close.iloc[-1]
+            # Cross above: previous close <= prev_ma and current > ma
+            crossed = (prev_close <= prev_ma) and (current > ma)
+            res[f"MA-{window}"] = bool(crossed)
+        else:
+            res[f"MA-{window}"] = False
+    return res
+
+
+def fetch_bist_data(symbols):
+    """
+    symbols: list of strings like "GARAN.IS"
+    returns list of dicts with all metrics
+    """
     results = []
     for symbol in symbols:
         try:
-            # Fetch last 10 days at 15m resolution to compute indicators robustly
+            # download 10 days of 15m bars to have enough history for indicators
             df = yf.download(symbol, period="10d", interval="15m", auto_adjust=True, progress=False)
             if df is None or df.empty:
                 continue
 
-            # Ensure datetime index timezone naive (simplify)
+            # ensure datetime index timezone-naive
             df = df.sort_index()
-            close = df["Close"]
+            df = df.dropna(subset=["Close"])  # close olmayan satırları çıkar
 
-            # RSI
-            rsi_series = rsi(close, period=14)
-            last_rsi = None
-            if not rsi_series.empty and not pd.isna(rsi_series.iloc[-1]):
-                last_rsi = float(rsi_series.iloc[-1])
+            df['RSI'] = calc_rsi(df['Close'])
+            rsi_val = float(df['RSI'].iloc[-1]) if not df['RSI'].empty else None
 
-            current_price = float(close.iloc[-1])
-            # MA trend
-            ma20 = close.rolling(20).mean().iloc[-1] if len(close) >= 20 else None
-            ma50 = close.rolling(50).mean().iloc[-1] if len(close) >= 50 else None
-            ma100 = close.rolling(100).mean().iloc[-1] if len(close) >= 100 else None
-            ma200 = close.rolling(200).mean().iloc[-1] if len(close) >= 200 else None
+            current_price = float(df['Close'].iloc[-1])
+            ma_breaks = detect_ma_breaks(df['Close'])
+            last_signal = None
+            if rsi_val is not None:
+                if rsi_val < 20: last_signal = "AL"
+                elif rsi_val > 80: last_signal = "SAT"
 
-            trend = "Yukarı" if (ma20 and ma50 and ma20 > ma50) else "Aşağı"
+            # green candles at hours 11 and 15 (using 1h resolution if available; using 15m here)
+            try:
+                hours = df.copy()
+                hours['hour'] = hours.index.hour
+                green_11 = not hours[hours['hour'] == 11].empty and (hours[hours['hour'] == 11]['Close'].iloc[-1] > hours[hours['hour'] == 11]['Open'].iloc[0])
+                green_15 = not hours[hours['hour'] == 15].empty and (hours[hours['hour'] == 15]['Close'].iloc[-1] > hours[hours['hour'] == 15]['Open'].iloc[0])
+            except Exception:
+                green_11 = False
+                green_15 = False
 
-            # 11 and 15 hour green candles (we inspect hourly windows inside 4H blocks like original)
-            # We approximate by checking any 15m candles between target hour and +4h for green overall
-            now = datetime.now()
-            def is_green_window(target_hour):
-                start = now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
-                end = start + timedelta(hours=4)
-                df_window = df[(df.index >= start) & (df.index < end)]
-                if df_window.empty:
-                    return False
-                open_price = df_window["Open"].iloc[0]
-                close_price = df_window["Close"].iloc[-1]
-                return close_price > open_price
+            three_peak = detect_three_peaks(df['Close'])
 
-            green_11 = is_green_window(11)
-            green_15 = is_green_window(15)
+            # simplistic support/resistance detection placeholders (you can replace with your algo)
+            support = float(df['Low'].rolling(window=20, min_periods=1).min().iloc[-1])
+            resistance = float(df['High'].rolling(window=20, min_periods=1).max().iloc[-1])
+            support_break = current_price < support * 0.995  # 0.5% below support
+            resistance_break = current_price > resistance * 1.005  # 0.5% above resistance
 
-            # detect 3-peak
-            three_peak = detect_three_peaks(close)
-
-            # detect MA breaks
-            ma_breaks = detect_ma_breaks(df, current_price)
-
-            # support/resistance break placeholders (user can extend)
-            support_break = False
-            resistance_break = False
-            # simple daily change & volume
-            daily_change = round(((current_price - df["Close"].iloc[0]) / df["Close"].iloc[0]) * 100, 2) if df["Close"].iloc[0] != 0 else 0
-            volume = int(df["Volume"].iloc[-1]) if "Volume" in df.columns and not pd.isna(df["Volume"].iloc[-1]) else None
-
-            # last_signal using RSI thresholds as before (preserve original logic)
-            last_signal = "Yok"
-            if last_rsi is not None:
-                if last_rsi < 20:
-                    last_signal = "AL"
-                elif last_rsi > 80:
-                    last_signal = "SAT"
+            daily_change = round(((current_price - float(df['Close'].iloc[0])) / float(df['Close'].iloc[0])) * 100, 2)
+            volume = int(df['Volume'].iloc[-1]) if 'Volume' in df.columns else None
 
             results.append({
-                "symbol": symbol.replace(".IS",""),
+                "symbol": symbol.replace(".IS", ""),
                 "current_price": current_price,
                 "yfinance_price": current_price,
-                "tv_price": None,
-                "sapma_pct": None,
-                "trend": trend,
-                "last_signal": last_signal,
+                "trend": "Yukarı" if df['Close'].rolling(window=20).mean().iloc[-1] < current_price else "Aşağı",
+                "last_signal": last_signal or "Yok",
                 "signal_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "daily_change": f"%{daily_change}",
                 "volume": volume,
-                "RSI": last_rsi,
-                "support": None,
-                "resistance": None,
-                "support_break": support_break,
-                "resistance_break": resistance_break,
-                "green_mum_11": green_11,
-                "green_mum_15": green_15,
-                "three_peak_break": three_peak,
-                "ma_breaks": ma_breaks  # MA-20/50/100/200 break flags
+                "RSI": rsi_val,
+                "support": support,
+                "resistance": resistance,
+                "support_break": bool(support_break),
+                "resistance_break": bool(resistance_break),
+                "green_mum_11": bool(green_11),
+                "green_mum_15": bool(green_15),
+                "three_peak_break": bool(three_peak),
+                "ma_breaks": ma_breaks
             })
+
         except Exception as e:
-            # skip symbol on error but continue
-            print("fetch error for", symbol, e)
+            # return a helpful error for logs but continue
+            # calling code will log exceptions
+            # continue to next symbol
+            # optionally append an error entry if you want
+            # print stack to logs
+            try:
+                import traceback
+                traceback.print_exc()
+            except:
+                pass
             continue
 
     return results
