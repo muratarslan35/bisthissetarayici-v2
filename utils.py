@@ -1,14 +1,29 @@
-import pandas as pd
-import numpy as np
+# utils.py
+from datetime import datetime, timedelta
 
-def safe_get(df, col, default=None):
-    if col in df.columns:
-        return df[col]
-    return default
+# Tekrar bildirim engelleme için hafıza
+LAST_SENT = {}
 
-def bool_any(series):
-    if series is None:
-        return False
-    return bool(series.any())
+def tr_now():
+    """Her zaman GMT+3 döndürür."""
+    return (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
 
-# burada başka yardımcı fonksiyonlar ekleyebilirsin
+def should_send(symbol, signal_type):
+    """
+    Aynı sinyalin aynı hissede tekrarını engeller.
+    symbol+signal_type birlikte kontrol edilir.
+    """
+    key = f"{symbol}_{signal_type}"
+    now = datetime.utcnow()
+
+    last = LAST_SENT.get(key)
+    if last is None:
+        LAST_SENT[key] = now
+        return True
+
+    # 1 saat içinde tekrar göndermesin
+    if (now - last).total_seconds() > 3600:
+        LAST_SENT[key] = now
+        return True
+
+    return False
