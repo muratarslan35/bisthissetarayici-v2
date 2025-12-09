@@ -5,10 +5,14 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
-# --- Helper: BIST30 & BIST100 sembollerini çek ---
+TZ = ZoneInfo("Europe/Istanbul")
+
+def tz_now_str():
+    return datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
+
 def get_bist_symbols():
-    # 1) Öncelikle API den dene (istasyon değişebilir)
     try:
         url = "https://api.isyatirim.com.tr/index/indexsectorperformance"
         r = requests.get(url, timeout=6)
@@ -17,7 +21,6 @@ def get_bist_symbols():
         bist30, bist100 = [], []
         for item in js:
             if item.get("indexCode") == "XU030":
-                # components listesi varsa
                 for c in item.get("components", []):
                     sym = c.get("symbol")
                     if sym:
@@ -29,19 +32,17 @@ def get_bist_symbols():
                         bist100.append(sym + ".IS")
         combined = list(dict.fromkeys(bist30 + bist100))
         if combined:
+            print("[fetch_bist] symbols from API:", len(combined))
             return combined
     except Exception as e:
-        print("[get_bist_symbols] fallback:", e)
+        print("[fetch_bist] get_bist_symbols fallback:", e)
 
-    # 2) fallback: sabit listeden al (en büyükler). İstersen burayı genişlet.
     fallback = [
         "GARAN.IS","AKBNK.IS","YKBNK.IS","ISCTR.IS","THYAO.IS","ASELS.IS","KRDMD.IS","PETKM.IS",
-        "EREGL.IS","TOASO.IS","TUPRS.IS","KOCAS.IS","BIMAS.IS","VAKBN.IS","SISE.IS","KOZAL.IS"
+        "EREGL.IS","TOASO.IS","TUPRS.IS","KOCAS.IS","BIMAS.IS","VAKBN.IS","SISE.IS","KOZAL.IS","PETKM.IS","KARSN.IS"
     ]
-    # append .IS değilse ekle
     return [s if s.endswith(".IS") else s + ".IS" for s in fallback]
 
-# --- RSI hesaplama ---
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = delta.clip(lower=0)
@@ -50,10 +51,8 @@ def calculate_rsi(series, period=14):
     avg_loss = loss.rolling(window=period, min_periods=1).mean()
     rs = avg_gain / avg_loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
-    # fillna için
     return rsi.fillna(50)
 
-# --- Basit MA'lar ---
 def moving_averages(df, windows=[20,50,100,200]):
     mas = {}
     for w in windows:
@@ -63,7 +62,6 @@ def moving_averages(df, windows=[20,50,100,200]):
             mas[w] = None
     return mas
 
-# --- three peaks tespiti (basit) ---
 def detect_three_peaks(close_series):
     if close_series.empty or len(close_series) < 5:
         return False
@@ -76,29 +74,39 @@ def detect_three_peaks(close_series):
     current_price = close_series.iloc[-1]
     return current_price > max_peak
 
-# --- destek/direnç kırılım (basit tanım: son N bar'ın en yüksek/düşüğünü kırma) ---
 def detect_support_resistance_break(df, lookback=20):
     if "Low" not in df.columns or "High" not in df.columns:
         return False, False
-    recent_low = df["Low"].rolling(window=lookback, min_periods=1).min().iloc[-2] if len(df) > 1 else df["Low"].iloc[-1]
-    recent_high = df["High"].rolling(window=lookback, min_periods=1).max().iloc[-2] if len(df) > 1 else df["High"].iloc[-1]
+    if len(df) < 2:
+        return False, False
+    recent_low = df["Low"].rolling(window=lookback, min_periods=1).min().shift(1).iloc[-1]
+    recent_high = df["High"].rolling(window=lookback, min_periods=1).max().shift(1).iloc[-1]
     current = df["Close"].iloc[-1]
-    support_break = current < recent_low
-    resistance_break = current > recent_high
+    support_break = False
+    resistance_break = False
+    try:
+        support_break = current < recent_low
+        resistance_break = current > recent_high
+    except Exception:
+        pass
     return support_break, resistance_break
 
-# --- Ana fetch fonksiyonu: her sembol için tüm algoritmaları döner ---
 def fetch_bist_data():
     symbols = get_bist_symbols()
     results = []
     for sym in symbols:
         try:
-            # yfinance ile tek tek çek (çoklu indirme hatalara yol açabiliyor)
+            # yfinance tek sembol çekimi (multi-download sık hata veriyor)
             df = yf.download(sym, period="7d", interval="15m", auto_adjust=True, progress=False)
-            # df çoklu ticker yapısı dönebilir; tek ticker için düz
+            if df is None or df.empty:
+                print("[fetch_bist] empty df for", sym)
+                time.sleep(0.15)
+                continue
+
+            # MultiIndex kontrolü
             if isinstance(df.columns, pd.MultiIndex):
-                # multiindex varsa Close sütununa eriş
-                if ("Close", sym) in df.columns:
+                # sipariş Open/High/Low/Close/Volume tekli sembol halinde beklenir
+                try:
                     df_t = pd.DataFrame({
                         "Open": df[("Open", sym)],
                         "High": df[("High", sym)],
@@ -106,30 +114,32 @@ def fetch_bist_data():
                         "Close": df[("Close", sym)],
                         "Volume": df[("Volume", sym)]
                     })
-                else:
-                    # beklenmeyen yapı
-                    print("[fetch_bist] unexpected multiindex for", sym)
+                except Exception as e:
+                    print("[fetch_bist] unexpected multiindex for", sym, e)
+                    time.sleep(0.15)
                     continue
             else:
-                # normal yapı
-                if "Close" not in df.columns:
-                    print("[fetch_bist] no Close for", sym)
+                # normal sütun yapısı
+                if not set(["Open","High","Low","Close"]).issubset(df.columns):
+                    print("[fetch_bist] no Close/Open/High/Low for", sym)
+                    time.sleep(0.15)
                     continue
                 df_t = df[["Open","High","Low","Close","Volume"]].copy()
 
-            # dropna güvenli (varsa)
+            # Temizlik
             df_t = df_t.dropna(how="all")
             if df_t.empty or "Close" not in df_t.columns:
-                print("[fetch_bist] empty or no Close after cleanup for", sym)
+                print("[fetch_bist] empty or missing Close for", sym)
+                time.sleep(0.15)
                 continue
 
-            # RSI ve MA'lar
+            # RSI / MA
             df_t["RSI"] = calculate_rsi(df_t["Close"])
             rsi_val = float(df_t["RSI"].iloc[-1])
 
             mas = moving_averages(df_t, windows=[20,50,100,200])
             current_price = float(df_t["Close"].iloc[-1])
-            # MA kırılım: fiyatın MA üzerinde/altında olması
+
             ma_breaks = {}
             for w, mv in mas.items():
                 if mv is None:
@@ -137,37 +147,30 @@ def fetch_bist_data():
                 else:
                     ma_breaks[f"MA{w}"] = "price_above" if current_price > mv else "price_below"
 
-            # golden/death cross örneği (MA20 x MA50)
+            # MA cross (20x50) örneği
             try:
-                ma20_series = df_t["Close"].rolling(20,min_periods=1).mean()
-                ma50_series = df_t["Close"].rolling(50,min_periods=1).mean()
-                if ma20_series.iloc[-2] <= ma50_series.iloc[-2] and ma20_series.iloc[-1] > ma50_series.iloc[-1]:
-                    ma_breaks["20x50"] = "golden_cross"
-                elif ma20_series.iloc[-2] >= ma50_series.iloc[-2] and ma20_series.iloc[-1] < ma50_series.iloc[-1]:
-                    ma_breaks["20x50"] = "death_cross"
+                ma20 = df_t["Close"].rolling(20, min_periods=1).mean()
+                ma50 = df_t["Close"].rolling(50, min_periods=1).mean()
+                if len(ma20) >= 2 and len(ma50) >= 2:
+                    if ma20.iloc[-2] <= ma50.iloc[-2] and ma20.iloc[-1] > ma50.iloc[-1]:
+                        ma_breaks["20x50"] = "golden_cross"
+                    elif ma20.iloc[-2] >= ma50.iloc[-2] and ma20.iloc[-1] < ma50.iloc[-1]:
+                        ma_breaks["20x50"] = "death_cross"
             except Exception:
                 pass
 
-            # support/resistance
             support_break, resistance_break = detect_support_resistance_break(df_t, lookback=20)
-
-            # 3 tepe
             three_peak = detect_three_peaks(df_t["Close"])
 
-            # 11 ve 15 kontrolü (günlük bazda 4H değilse 15m veride saat kontrolü)
-            df_t_index = df_t.copy()
-            df_t_index["hour"] = df_t_index.index.hour
-            green_11 = not df_t_index[(df_t_index["hour"] == 11) & (df_t_index["Close"] <= df_t_index["Open"])].any().any()
-            green_11 = any((df_t_index["hour"] == 11) & (df_t_index["Close"] > df_t_index["Open"]))
-            green_15 = any((df_t_index["hour"] == 15) & (df_t_index["Close"] > df_t_index["Open"]))
+            # saat kontrolü
+            df_t["hour"] = df_t.index.tz_localize(None).hour
+            green_11 = any((df_t["hour"] == 11) & (df_t["Close"] > df_t["Open"]))
+            green_15 = any((df_t["hour"] == 15) & (df_t["Close"] > df_t["Open"]))
 
-            # trend MA20>MA50 gibi
-            trend = "Yukarı" if mas.get(20, 0) and mas.get(50, 0) and mas[20] > mas[50] else "Aşağı"
+            trend = "Yukarı" if mas.get(20,0) and mas.get(50,0) and mas[20] > mas[50] else "Aşağı"
+            daily_change = round((current_price - df_t["Close"].iloc[0]) / df_t["Close"].iloc[0] * 100, 2) if len(df_t)>0 else 0
+            vol = int(df_t["Volume"].iloc[-1]) if "Volume" in df_t.columns and not pd.isna(df_t["Volume"].iloc[-1]) else None
 
-            daily_change = round((current_price - df_t["Close"].iloc[0]) / df_t["Close"].iloc[0] * 100, 2) if len(df_t) > 0 else 0
-            volume = int(df_t["Volume"].iloc[-1]) if "Volume" in df_t.columns and not pd.isna(df_t["Volume"].iloc[-1]) else None
-
-            # basit sinyal: RSI
             last_signal = "Yok"
             if rsi_val < 30:
                 last_signal = "AL"
@@ -180,9 +183,9 @@ def fetch_bist_data():
                 "yfinance_price": current_price,
                 "trend": trend,
                 "last_signal": last_signal,
-                "signal_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "signal_time": tz_now_str(),
                 "daily_change": f"%{daily_change}",
-                "volume": volume,
+                "volume": vol,
                 "RSI": rsi_val,
                 "support_break": support_break,
                 "resistance_break": resistance_break,
@@ -194,7 +197,9 @@ def fetch_bist_data():
             })
         except Exception as e:
             print("[fetch_bist] fetch error for", sym, e)
+            # hata olsa da devam et
+            time.sleep(0.15)
             continue
-        # hafif bekle (yfinance rate limit için)
-        time.sleep(0.2)
+
+        time.sleep(0.15)
     return results
