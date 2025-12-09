@@ -1,51 +1,78 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <title>BIST Tarayıcı Dashboard</title>
-    <style>
-        body { font-family: Arial; padding: 20px; background: #f2f2f2; }
-        table { width: 100%; border-collapse: collapse; background: white; }
-        th, td { padding: 8px; border: 1px solid #ccc; text-align: center; }
-        th { background: #333; color: white; }
-        tr:nth-child(even) { background: #f9f9f9; }
-    </style>
+  <meta charset="utf-8">
+  <title>BIST Tarayıcı Dashboard</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    body{font-family:Inter,system-ui,Segoe UI,Arial; margin:12px; color:#111;}
+    h1{margin-bottom:8px;}
+    table{width:100%;border-collapse:collapse;}
+    th,td{padding:8px;border:1px solid #e6e6e6;text-align:left;font-size:13px;}
+    th{background:#f7f7f7;position:sticky;top:0;}
+    .small{font-size:12px;color:#666;}
+    .ok{background:#e6ffed;}
+    .warn{background:#fff7e6;}
+    .bad{background:#ffe6e6;}
+    #last {margin-bottom:12px;color:#333;}
+  </style>
 </head>
 <body>
-    <h2>BIST Tarayıcı — Canlı Veri</h2>
-    <table id="tb"></table>
+  <h1>BIST Tarayıcı</h1>
+  <div id="last" class="small">Veri bekleniyor...</div>
+  <table id="tbl">
+    <thead>
+      <tr>
+        <th>Symbol</th>
+        <th>Fiyat</th>
+        <th>RSI</th>
+        <th>Sinyal</th>
+        <th>Trend</th>
+        <th>MA Kırılımları</th>
+        <th>Günlük %</th>
+        <th>Hacim</th>
+        <th>Zaman</th>
+      </tr>
+    </thead>
+    <tbody id="body"></tbody>
+  </table>
 
 <script>
-async function load() {
-    let r = await fetch("/api");
-    let js = await r.json();
-
-    let tb = document.getElementById("tb");
-    tb.innerHTML = `
-        <tr>
-            <th>Hisse</th><th>Fiyat</th><th>RSI</th><th>Sinyal</th>
-            <th>Trend</th><th>Günlük</th><th>Hacim</th><th>Saat</th>
-        </tr>
-    `;
-
-    for (let h of js.data || []) {
-        tb.innerHTML += `
-            <tr>
-                <td>${h.symbol}</td>
-                <td>${h.current_price}</td>
-                <td>${h.RSI}</td>
-                <td>${h.last_signal}</td>
-                <td>${h.trend}</td>
-                <td>${h.daily_change}</td>
-                <td>${h.volume}</td>
-                <td>${h.signal_time}</td>
-            </tr>
-        `;
+async function fetchAndRender(){
+  try{
+    const res = await fetch('/api');
+    const js = await res.json();
+    const body = document.getElementById('body');
+    body.innerHTML = '';
+    if(js.status !== 'ok' || !js.data){
+      document.getElementById('last').innerText = 'API durumu: ' + js.status;
+      return;
     }
+    document.getElementById('last').innerText = 'Güncelleme: ' + new Date(js.timestamp*1000).toLocaleString();
+    js.data.forEach(item=>{
+      const tr = document.createElement('tr');
+      const ma_breaks = item.ma_breaks || {};
+      let maText = Object.entries(ma_breaks).filter(([k,v])=>v).map(([k])=>k).join(', ') || '-';
+      let rsiClass = item.RSI !== null ? (item.RSI < 25 ? 'ok' : (item.RSI>75 ? 'bad' : '')) : '';
+      tr.innerHTML = `
+        <td>${item.symbol}</td>
+        <td>${item.current_price ?? '-'}</td>
+        <td class="${rsiClass}">${item.RSI ?? '-'}</td>
+        <td>${item.last_signal ?? '-'}</td>
+        <td>${item.trend ?? '-'}</td>
+        <td>${maText}</td>
+        <td>${item.daily_change ?? '-'}</td>
+        <td>${item.volume ?? '-'}</td>
+        <td>${item.signal_time ?? '-'}</td>
+      `;
+      body.appendChild(tr);
+    });
+  }catch(err){
+    document.getElementById('last').innerText = 'Hata: ' + err;
+  }
 }
-setInterval(load, 5000);
-load();
+fetchAndRender();
+setInterval(fetchAndRender, 60*1000);
 </script>
-
 </body>
 </html>
