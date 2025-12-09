@@ -1,6 +1,10 @@
-Flask
+Flask>=2.0
 gunicorn
 requests
 yfinance
 pandas
 numpy
+beautifulsoup4
+lxml
+python-dateutil
+flask-cors
