@@ -1,76 +1,82 @@
 <!doctype html>
-<html>
+<html lang="tr">
 <head>
-  <meta charset="utf-8"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>BIST Tarayıcı Dashboard</title>
   <style>
-    body { font-family: Arial, Helvetica, sans-serif; margin: 16px; background:#f7f7f7; }
-    table { border-collapse: collapse; width: 100%; background: white; }
-    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 13px; }
-    th { background: #333; color: #fff; position: sticky; top: 0; z-index: 2; }
-    tr:nth-child(even){background:#f2f2f2;}
-    .small { font-size: 12px; color:#666; }
-    .badge { padding: 2px 6px; border-radius: 4px; color: #fff; font-weight: bold; }
-    .green { background: #2ecc71; }
-    .red { background: #e74c3c; }
-    .blue { background: #3498db; }
+    body { font-family: Arial, Helvetica, sans-serif; margin: 12px; background:#f7f9fc; color:#222; }
+    h1 { margin: 8px 0 14px; font-size:24px; }
+    table { width:100%; border-collapse: collapse; background:white; box-shadow:0 1px 4px rgba(0,0,0,0.06); }
+    th, td { padding:8px 10px; text-align:left; border-bottom:1px solid #eee; font-size:13px; }
+    th { background:#fafafa; position: sticky; top:0; z-index:2; }
+    tr:hover { background:#f1f7ff; }
+    .small { font-size:12px; color:#666; }
+    .ok { color:green; font-weight:600; }
+    .bad { color:red; font-weight:600; }
+    #status { margin-bottom:8px; }
+    .wrap { max-width:1200px; margin:0 auto; }
   </style>
 </head>
 <body>
-  <h2>BIST Tarayıcı Dashboard</h2>
-  <div class="small">Veri güncellemesi: <span id="ts">-</span></div>
-  <table id="tbl">
-    <thead>
-      <tr>
-        <th>Symbol</th>
-        <th>Fiyat</th>
-        <th>RSI</th>
-        <th>Trend</th>
-        <th>Günlük</th>
-        <th>Hacim</th>
-        <th>Sinyal</th>
-        <th>MA Kırılımları</th>
-        <th>Diğer</th>
-      </tr>
-    </thead>
-    <tbody id="body"></tbody>
-  </table>
+  <div class="wrap">
+    <h1>BIST Tarayıcı Dashboard</h1>
+    <div id="status" class="small">Durum: <span id="status_text">yükleniyor...</span></div>
+    <table id="tbl">
+      <thead>
+        <tr>
+          <th>Sembol</th>
+          <th>Fiyat</th>
+          <th>RSI</th>
+          <th>Signal</th>
+          <th>Trend</th>
+          <th>Günlük Değişim</th>
+          <th>Hacim</th>
+          <th>MA20/50/100/200</th>
+          <th>Support/Resistance</th>
+          <th>Zaman</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
 
   <script>
-    async function load() {
+    async function fetchData(){
       try {
-        const res = await fetch('/api');
-        const data = await res.json();
-        document.getElementById('ts').innerText = new Date((data.timestamp||0)*1000).toLocaleString();
-        const body = document.getElementById('body');
-        body.innerHTML = '';
-        const rows = (data.data||[]);
-        rows.forEach(r=>{
+        let r = await fetch('/api');
+        let j = await r.json();
+        document.getElementById('status_text').innerText = j.status + ' — ' + (j.timestamp ? new Date(j.timestamp*1000).toLocaleString() : '');
+        const tbody = document.querySelector('#tbl tbody');
+        tbody.innerHTML = '';
+        if (!j.data || j.data.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="10" class="small">Henüz veri yok.</td></tr>';
+          return;
+        }
+        j.data.forEach(item=>{
+          const ma_vals = item.ma_values ? Object.values(item.ma_values).map(v => v ? v.toFixed(2) : '-') : [];
+          const ma_text = ma_vals.join(' / ');
           const tr = document.createElement('tr');
           tr.innerHTML = `
-            <td>${r.symbol}</td>
-            <td>${r.current_price}</td>
-            <td>${r.RSI ? r.RSI.toFixed(2) : '-'}</td>
-            <td>${r.trend}</td>
-            <td>${r.daily_change}</td>
-            <td>${r.volume||'-'}</td>
-            <td>${r.last_signal || '-'}</td>
-            <td>${Object.entries(r.ma_breaks || {}).filter(x=>x[1]).map(x=>x[0]).join(', ') || '-'}</td>
-            <td>
-              ${r.support_break ? '<span class="badge green">Destek Kırıldı</span>' : ''}
-              ${r.resistance_break ? '<span class="badge red">Direnç Kırıldı</span>' : ''}
-              ${r.three_peak_break ? '<span class="badge blue">3 Tepe</span>' : ''}
-            </td>
+            <td>${item.symbol}</td>
+            <td>${item.current_price ?? '-'}</td>
+            <td>${item.RSI ? item.RSI.toFixed(2) : '-'}</td>
+            <td>${item.last_signal ?? '-'}</td>
+            <td>${item.trend ?? '-'}</td>
+            <td>${item.daily_change ?? '-'}</td>
+            <td>${item.volume ?? '-'}</td>
+            <td>${ma_text}</td>
+            <td>${item.support_break ? 'Destek kırıldı' : (item.resistance_break ? 'Direnç kırıldı' : '-')}</td>
+            <td>${item.signal_time ?? '-'}</td>
           `;
-          body.appendChild(tr);
+          tbody.appendChild(tr);
         });
       } catch (e) {
-        console.error(e);
+        document.getElementById('status_text').innerText = 'hata: ' + e;
       }
     }
-
-    load();
-    setInterval(load, 60*1000); // 60s
+    fetchData();
+    setInterval(fetchData, 10000);
   </script>
 </body>
 </html>
