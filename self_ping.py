@@ -1,16 +1,11 @@
-import threading
-import time
 import requests
-import os
+import time
 
 def start_self_ping():
-    def loop():
-        while True:
-            try:
-                url = os.getenv("RENDER_EXTERNAL_URL")
-                if url:
-                    requests.get(url, timeout=5)
-            except:
-                pass
-            time.sleep(120)  # 2 dk
-    threading.Thread(target=loop, daemon=True).start()
+    URL = "https://bisthissetarayici-v2.onrender.com"
+    while True:
+        try:
+            requests.get(URL, timeout=5)
+        except:
+            pass
+        time.sleep(60)
