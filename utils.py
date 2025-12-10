@@ -14,7 +14,7 @@ FALLBACK_SYMBOLS = [
 "BALSU.IS","BERA.IS","BIMAS.IS","BLCYT.IS","BOBET.IS","BRKSN.IS","BRYAT.IS","BSRN.IS","BTCIM.IS","BURCE.IS",
 "CANTE.IS","CCOLA.IS","CEMAS.IS","CEMTS.IS","CGLYO.IS","CMENT.IS","CIMSA.IS","CLEBI.IS","COMDO.IS",
 "CUSAN.IS","DAGHL.IS","DENGE.IS","DERIM.IS","DESA.IS","DEVA.IS","DGNMO.IS","DIRIT.IS","DITAS.IS",
-"DZGYO.IS","EGEEN.IS","EGGUB.IS","EGEPO.IS","EKGYO.IS","EMKEL.IS","ENKAI.IS","ENJSA.IS","ENKAI.IS",
+"DZGYO.IS","EGEEN.IS","EGGUB.IS","EGPRO.IS","EKGYO.IS","EMKEL.IS","ENKAI.IS","ENJSA.IS","ENKAI.IS",
 "ERCB.IS","EREGL.IS","ERSU.IS","EUREN.IS","FROTO.IS","FFKRL.IS","FMIZP.IS","FONET.IS",
 "GARAN.IS","GEDZA.IS","GENIL.IS","GENIL.IS","GEREL.IS","GLBMD.IS","GLRYH.IS","GOZDE.IS","GRSAN.IS",
 "GUBRF.IS","GZNMI.IS","HALKB.IS","HEKTS.IS","HRKLB.IS","IHLGM.IS","IHGZT.IS","INDES.IS",
@@ -26,7 +26,7 @@ FALLBACK_SYMBOLS = [
 "MAVI.IS","MAALT.IS","MARTI.IS","MEPET.IS","MGROS.IS","MIATK.IS","MPARK.IS","MTRKS.IS",
 "NETAS.IS","NIBAS.IS","ODAS.IS","ODAS.IS","OYAYO.IS","OTKAR.IS","OYLUM.IS","OZBAL.IS",
 "PAMEL.IS","PANEL.IS","PARSN.IS","PEGAS.IS","PEKGY.IS","PETKM.IS","PETUN.IS",
-"PGSUS.IS","PKART.IS","PKENT.IS","POLTK.IS","PRKAB.IS","PRZMA.IS","PSDTC.IS", "PSGYO.IS",
+"PGSUS.IS","PKART.IS","PKENT.IS","POLTK.IS","PRKAB.IS","PRZMA.IS","PSDTC.IS",
 "QNBFL.IS","QUAGR.IS","RAYSG.IS","RODRG.IS","RTALB.IS","RYGYO.IS","SAFKR.IS",
 "SANEL.IS","SASA.IS","SARKY.IS","SAHOL.IS","SDTTR.IS","SEKUR.IS","SELVA.IS",
 "SEGYO.IS","SELEC.IS","SISE.IS","SILVR.IS","SKBNK.IS","SMART.IS","SMBYO.IS","SNICA.IS",
@@ -45,4 +45,41 @@ def calculate_rsi(series, period=14):
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
     avg_gain = gain.rolling(window=period, min_periods=1).mean()
-    avg_loss = loss.
+    avg_loss = loss.rolling(window=period, min_periods=1).mean().replace(0, np.nan)
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.fillna(50)
+
+def moving_averages(df, windows=[20,50,100,200]):
+    mas = {}
+    for w in windows:
+        if "Close" in df.columns:
+            mas[w] = df["Close"].rolling(window=w, min_periods=1).mean().iloc[-1]
+        else:
+            mas[w] = None
+    return mas
+
+def detect_three_peaks(close_series):
+    if close_series.empty or len(close_series) < 5:
+        return False
+    peaks = (close_series > close_series.shift(1)) & (close_series > close_series.shift(-1))
+    peak_idx = close_series[peaks].index
+    if len(peak_idx) < 3:
+        return False
+    last_three = peak_idx[-3:]
+    max_peak = close_series.loc[last_three].max()
+    current_price = close_series.iloc[-1]
+    return current_price > max_peak
+
+def detect_support_resistance_break(df, lookback=20):
+    if "Low" not in df.columns or "High" not in df.columns:
+        return False, False
+    recent_low = df["Low"].rolling(window=lookback, min_periods=1).min().iloc[-2] if len(df) > 1 else df["Low"].iloc[-1]
+    recent_high = df["High"].rolling(window=lookback, min_periods=1).max().iloc[-2] if len(df) > 1 else df["High"].iloc[-1]
+    current = df["Close"].iloc[-1]
+    support_break = current < recent_low
+    resistance_break = current > recent_high
+    return support_break, resistance_break
+
+def to_tr_timezone(dt):
+    return dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo("Europe/Istanbul"))
