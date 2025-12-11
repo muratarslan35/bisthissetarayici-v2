@@ -1,6 +1,6 @@
 # utils.py
 import math
-from datetime import datetime
+from datetime import datetime, timezone      # <-- ✔ EKLENDİ (ZORUNLU)
 from zoneinfo import ZoneInfo
 import pandas as pd
 import numpy as np
@@ -78,5 +78,5 @@ def detect_support_resistance_break(df, lookback=20):
 def to_tr_timezone(dt):
     # dt : naive UTC datetime or aware UTC
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=timezone.utc)   # <-- ✔ BURADA timezone KULLANILIYOR
     return dt.astimezone(ZoneInfo("Europe/Istanbul"))
