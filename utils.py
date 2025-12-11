@@ -1,6 +1,6 @@
 # utils.py
 import math
-from datetime import datetime, timezone      # <-- ✔ EKLENDİ (ZORUNLU)
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 import pandas as pd
 import numpy as np
@@ -66,17 +66,53 @@ def detect_three_peaks(close_series):
     return current_price > max_peak
 
 def detect_support_resistance_break(df, lookback=20):
+    """
+    Basit kırılım tespiti: lookback dönemi içindeki min/max (bir önceki bar dahil edilerek) üzerinden
+    son kapanışın kırıp kırmadığını kontrol eder.
+    """
     if "Low" not in df.columns or "High" not in df.columns:
         return False, False
-    recent_low = df["Low"].rolling(window=lookback, min_periods=1).min().iloc[-2] if len(df) > 1 else df["Low"].iloc[-1]
-    recent_high = df["High"].rolling(window=lookback, min_periods=1).max().iloc[-2] if len(df) > 1 else df["High"].iloc[-1]
+    if len(df) < 2:
+        return False, False
+    # previous extremes (exclude current bar)
+    prev_low = df["Low"].iloc[:-1].rolling(window=lookback, min_periods=1).min().iloc[-1]
+    prev_high = df["High"].iloc[:-1].rolling(window=lookback, min_periods=1).max().iloc[-1]
     current = df["Close"].iloc[-1]
-    support_break = current < recent_low
-    resistance_break = current > recent_high
+    support_break = current < prev_low
+    resistance_break = current > prev_high
     return support_break, resistance_break
 
+def nearest_support_resistance_from_history(df, lookback=100):
+    """
+    Basit destek/direnç bul (geçmiş pivot seviye yaklaşımı):
+    - lookback adet bar içinden yerel yüksek/düşük pivot'ları topla,
+    - en yakın üst/alt seviyeyi döndür.
+    """
+    if df.empty or "Close" not in df.columns:
+        return None, None
+    highs = df["High"].rolling(3, center=True).max()
+    lows = df["Low"].rolling(3, center=True).min()
+    pivots_high = df["High"][(df["High"] == highs)]
+    pivots_low = df["Low"][(df["Low"] == lows)]
+    pivots_high = pivots_high.dropna()
+    pivots_low = pivots_low.dropna()
+    if pivots_high.empty and pivots_low.empty:
+        return None, None
+    current = df["Close"].iloc[-1]
+    # candidate resistance = pivots_high values greater than current
+    resistances = [v for v in pivots_high.values if v > current]
+    supports = [v for v in pivots_low.values if v < current]
+    nearest_res = min(resistances) if resistances else (max(pivots_high.values) if not pivots_high.empty else None)
+    nearest_supp = max(supports) if supports else (min(pivots_low.values) if not pivots_low.empty else None)
+    return nearest_supp, nearest_res
+
 def to_tr_timezone(dt):
-    # dt : naive UTC datetime or aware UTC
+    """
+    dt: naive UTC datetime or aware datetime
+    returns: aware datetime in Europe/Istanbul timezone
+    """
+    if dt is None:
+        return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)   # <-- ✔ BURADA timezone KULLANILIYOR
+        dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(ZoneInfo("Europe/Istanbul"))
