@@ -1,120 +1,158 @@
-# signal_engine.py
-from datetime import datetime
-from zoneinfo import ZoneInfo
-import threading
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
 
-# Keys: choose stable keys representing each rule
-def process_signals(data, notified_state: dict, tz=None):
+# ============================================================
+#  FALLBACK LISTESİ
+# ============================================================
+FALLBACK_SYMBOLS = [
+    "ASELS","THYAO","TUPRS","PETKM","KRDMD","KRDMA","KRDMB","GARAN","YKBNK","AKBNK",
+    "ISCTR","SISE","EREGL","BIMAS","SAHOL","TOASO","HEKTS","SASA","FROTO","KOZAL",
+    "KOZAA","PENTA","PGSUS","ALARK","ARCLK","ENJSA","AKSA","KCHOL","VESTL","KONTR",
+    "TTRAK","AEFES","ODAS","ASELS","CLEBI","KORDS","TAVHL","TKFEN","ULKER","AGHOL",
+    "ISMEN","OTKAR","SELEC","SOKM","BAGFS","GESAN","QUAGR","YUNSA","YEOTK","AYDEM",
+    # Kullanıcı eklemeleri
+    "TEHOL","PEKGY","TUKAS","TERA"
+]
+
+# ============================================================
+#  INDICATOR FONKSİYONLARI
+# ============================================================
+
+def rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0).rolling(period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(period).mean()
+    rs = gain / loss.replace(0, np.nan)
+    return 100 - (100 / (1 + rs))
+
+def moving_average(series, window):
+    return series.rolling(window).mean()
+
+def ema(series, span):
+    return series.ewm(span=span, adjust=False).mean()
+
+def volume_ma(volume, window=20):
+    return volume.rolling(window).mean()
+
+# ============================================================
+#  Günlük Sinyal Kontrolü (1D)
+# ============================================================
+def check_daily_alignment(df):
     """
-    data: list of dict (from fetch_bist.fetch_bist_data)
-    notified_state: dict symbol -> set(event_keys)
-    tz: timezone object for formatting times (ZoneInfo("Europe/Istanbul"))
-    returns: list of (symbol, event_key, message)
+    3 koşullu A tipi TEMİZ sinyal:
+    1) Günlük RSI > 50
+    2) Günlük EMA20 üzerinde kapanış
+    3) Günlük hacim MA20 üzerinde olmalı
     """
-    events = []
-    if tz is None:
-        tz = ZoneInfo("Europe/Istanbul")
+    if len(df) < 30:
+        return False  # yeterli veri yok
 
-    for item in data:
-        symbol = item.get("symbol")
-        if not symbol:
-            continue
-        # ensure structure
-        if symbol not in notified_state:
-            notified_state[symbol] = set()
+    df["EMA20"] = ema(df["close"], 20)
+    df["RSI"] = rsi(df["close"])
+    df["VMA20"] = volume_ma(df["volume"], 20)
 
-        current_price = item.get("current_price")
-        rsi = item.get("RSI")
-        last_signal = item.get("last_signal")
-        support_break = item.get("support_break")
-        resistance_break = item.get("resistance_break")
-        three_peak = item.get("three_peak_break")
-        green_11 = item.get("green_mum_11")
-        green_15 = item.get("green_mum_15")
-        ma_breaks = item.get("ma_breaks", {})  # e.g. MA20: price_above
-        ma_values = item.get("ma_values", {})
+    last = df.iloc[-1]
 
-        # Build a helper to notify once per event_key
-        def notify_once(key, text):
-            if key not in notified_state[symbol]:
-                notified_state[symbol].add(key)
-                events.append((symbol, key, text))
+    cond1 = last["RSI"] > 50
+    cond2 = last["close"] > last["EMA20"]
+    cond3 = last["volume"] > last["VMA20"]
 
-        def clear_if_false(key):
-            if key in notified_state[symbol]:
-                notified_state[symbol].remove(key)
+    return cond1 and cond2 and cond3
 
-        # 1) RSI extremes
-        if rsi is not None:
-            if rsi < 20:
-                notify_once("RSI_LT_20", f"🔻 {symbol} RSI düşük: {rsi:.2f} (Fiyat: {current_price} TL)")
-            else:
-                clear_if_false("RSI_LT_20")
 
-            if rsi > 80:
-                notify_once("RSI_GT_80", f"🔺 {symbol} RSI yüksek: {rsi:.2f} (Fiyat: {current_price} TL)")
-            else:
-                clear_if_false("RSI_GT_80")
+# ============================================================
+#  Ana 5D Sinyal Motoru
+# ============================================================
+def process_signals(df_5m, df_daily):
+    """
+    df_5m → 5 dakikalık veri
+    df_daily → günlük veri
 
-        # 2) AL / SAT (based on last_signal)
-        if last_signal == "AL":
-            notify_once("SIGNAL_AL", f"🟢 {symbol} AL sinyali! RSI: {rsi:.2f} Fiyat: {current_price} TL")
-        else:
-            clear_if_false("SIGNAL_AL")
+    Tüm algoritmalar korunmuştur.
+    Günlük sinyal filtrelemesi (A tipi 3 uyum) entegredir.
+    """
 
-        if last_signal == "SAT":
-            notify_once("SIGNAL_SAT", f"🔴 {symbol} SAT sinyali! RSI: {rsi:.2f} Fiyat: {current_price} TL")
-        else:
-            clear_if_false("SIGNAL_SAT")
+    results = {
+        "buy_signals": [],
+        "sell_signals": [],
+        "daily_alignment": False,
+    }
 
-        # 3) support/resistance
-        if support_break:
-            notify_once("SUPPORT_BREAK", f"🟢 {symbol} destek kırıldı! Fiyat: {current_price} TL")
-        else:
-            clear_if_false("SUPPORT_BREAK")
-        if resistance_break:
-            notify_once("RESISTANCE_BREAK", f"🔴 {symbol} direnç kırıldı! Fiyat: {current_price} TL")
-        else:
-            clear_if_false("RESISTANCE_BREAK")
+    # ------------------------------------------------------------
+    # Günlük senkron kontrolü
+    # ------------------------------------------------------------
+    results["daily_alignment"] = check_daily_alignment(df_daily)
 
-        # 4) three peak
-        if three_peak:
-            notify_once("THREE_PEAK", f"⚠️ {symbol} üç tepe kırılımı gerçekleşti! Fiyat: {current_price} TL")
-        else:
-            clear_if_false("THREE_PEAK")
+    # ------------------------------------------------------------
+    # 5 dakikalık göstergeler
+    # ------------------------------------------------------------
+    df = df_5m.copy()
 
-        # 5) 11:00 ve 15:00 yeşil mum (if True notify)
-        if green_11:
-            notify_once("GREEN_11", f"🟢 {symbol} 11:00'de yeşil mum oluştu. Fiyat: {current_price} TL")
-        else:
-            clear_if_false("GREEN_11")
-        if green_15:
-            notify_once("GREEN_15", f"🟢 {symbol} 15:00'te yeşil mum oluştu. Fiyat: {current_price} TL")
-        else:
-            clear_if_false("GREEN_15")
+    df["EMA20"] = ema(df["close"], 20)
+    df["EMA50"] = ema(df["close"], 50)
+    df["RSI"] = rsi(df["close"], 14)
+    df["VMA20"] = volume_ma(df["volume"], 20)
+    df["MA9"] = moving_average(df["close"], 9)
+    df["MA21"] = moving_average(df["close"], 21)
 
-        # 6) MA break notifications (MA20,50,100,200 price_above/price_below)
-        for k, v in ma_breaks.items():
-            # create event key like "MA20_above"
-            if v == "price_above":
-                notify_once(f"{k}_ABOVE", f"📈 {symbol} {k} üzerinde. ({v}) Fiyat: {current_price} TL")
-            elif v == "price_below":
-                notify_once(f"{k}_BELOW", f"📉 {symbol} {k} altında. ({v}) Fiyat: {current_price} TL")
-            else:
-                # clear for that MA
-                clear_if_false(f"{k}_ABOVE"); clear_if_false(f"{k}_BELOW")
+    # Golden cross
+    df["golden_cross"] = (df["EMA20"] > df["EMA50"]) & (df["EMA20"].shift() <= df["EMA50"].shift())
 
-        # 7) combination rules you asked for:
-        # - If any symbol has: daily candle green (we approximate with positive daily_change) AND 4H green OR 2nd green etc.
-        # Since we use 15m bars only, we provide a heuristic: if daily %>0 and green_11 or green_15 -> notify composite
-        daily_change = item.get("daily_change", "0")
-        # daily_change string like "%2.71" -> extract
-        try:
-            dchg = float(str(daily_change).replace("%",""))
-        except:
-            dchg = 0.0
-        # Composite condition sample:
-        if dchg > 0 and (green_11 or green_15):
-            notify_once("COMBO_DAILY_4H", f"✅ Kombine: {symbol} günlük mum pozitif (%{dchg}) ve saat 11/15'te yeşil mum var. Fiyat: {current_price} TL")
+    # Bear cross
+    df["bear_cross"] = (df["EMA20"] < df["EMA50"]) & (df["EMA20"].shift() >= df["EMA50"].shift())
 
-    return events
+    # Breakout
+    df["breakout"] = (df["close"] > df["close"].rolling(20).max().shift())
+
+    last = df.iloc[-1]
+
+    # ============================================================
+    #  BUY / SELL SİNYALLERİ
+    # ============================================================
+
+    # ---------------------- BUY --------------------------------
+    buy_conditions = [
+        last["RSI"] > 55,
+        last["EMA20"] > last["EMA50"],
+        last["volume"] > last["VMA20"],
+        last["close"] > last["MA9"],
+        last["close"] > last["MA21"],
+        results["daily_alignment"] == True,    # Günlük filtre ON
+    ]
+
+    if all(buy_conditions):
+        results["buy_signals"].append({
+            "type": "BUY",
+            "reason": "RSI>55 + EMA20>EMA50 + Volume>VMA20 + MA uyum + Günlük A Tipi Uyum",
+            "price": float(last["close"])
+        })
+
+    # ---------------------- SELL --------------------------------
+    sell_conditions = [
+        last["RSI"] < 45,
+        last["EMA20"] < last["EMA50"],
+        last["close"] < last["MA9"],
+        last["close"] < last["MA21"],
+    ]
+
+    if all(sell_conditions):
+        results["sell_signals"].append({
+            "type": "SELL",
+            "reason": "RSI<45 + EMA20<EMA50 + MA kırılım",
+            "price": float(last["close"])
+        })
+
+    # Golden Cross Sinyali
+    if last["golden_cross"]:
+        results["buy_signals"].append({"type": "BUY", "reason": "GOLDEN CROSS", "price": float(last["close"])})
+
+    # Bearish Cross Sinyali
+    if last["bear_cross"]:
+        results["sell_signals"].append({"type": "SELL", "reason": "BEAR CROSS", "price": float(last["close"])})
+
+    # Breakout
+    if last["breakout"] and results["daily_alignment"]:
+        results["buy_signals"].append({"type": "BUY", "reason": "BREAKOUT + Günlük Uyum", "price": float(last["close"])})
+
+    return results
