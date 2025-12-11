@@ -4,7 +4,9 @@ import threading
 import time
 import json
 from datetime import datetime, timezone, timedelta
+import datetime as dt      # <<< EKLENDİ — timezone hatası için güvenli fallback
 from flask import Flask, jsonify, send_from_directory, request, make_response
+
 try:
     from flask_cors import CORS
 except Exception:
@@ -108,13 +110,20 @@ def update_loop():
 
                 processed.append(item)
 
+            # --- TIMEZONE FIX ---
+            try:
+                now_tr = to_tr_timezone(datetime.utcnow())
+            except Exception:
+                # fallback — timezone hatası durumunda
+                now_tr = datetime.now(dt.timezone.utc) + timedelta(hours=3)
+
             with data_lock:
                 LATEST_DATA = {
                     "status": "ok",
                     "data": processed,
                     "timestamp": int(time.time()),
-                    "last_fetch": to_tr_timezone(datetime.utcnow()).strftime("%Y-%m-%d %H:%M:%S"),
-                    "last_scan": to_tr_timezone(datetime.utcnow()).strftime("%Y-%m-%d %H:%M:%S")
+                    "last_fetch": now_tr.strftime("%Y-%m-%d %H:%M:%S"),
+                    "last_scan": now_tr.strftime("%Y-%m-%d %H:%M:%S")
                 }
 
             print(f"[APP] Loop completed. {len(processed)} symbols scanned.")
