@@ -1,139 +1,223 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>BIST Sinyal Dashboard</title>
+<meta charset="UTF-8">
+<title>BIST Algo Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-    <style>
-        body {
-            background: #111;
-            color: #eee;
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-        }
+<!-- GOOGLE FONTS -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
 
-        header {
-            background: #222;
-            padding: 15px;
-            text-align: center;
-            font-size: 24px;
-            font-weight: bold;
-            border-bottom: 2px solid #444;
-        }
+<style>
+    body {
+        font-family: 'Inter', sans-serif;
+        background: #0d1117;
+        color: #e6edf3;
+        margin: 0;
+        padding: 0;
+    }
 
-        .container {
-            padding: 20px;
-        }
+    h1 {
+        text-align: center;
+        font-weight: 600;
+        margin-top: 20px;
+        color: #58a6ff;
+    }
 
-        .signal-box {
-            background: #1a1a1a;
-            border: 1px solid #333;
-            padding: 15px;
-            margin-bottom: 15px;
-            border-radius: 8px;
-        }
+    /* Üst bar */
+    .top-bar {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        background: #161b22;
+        padding: 10px 15px;
+        border-bottom: 1px solid #30363d;
+        font-size: 14px;
+    }
 
-        .symbol {
-            font-size: 20px;
-            font-weight: bold;
-        }
+    .filter-box {
+        background: #161b22;
+        padding: 10px;
+        margin: 10px;
+        border-radius: 8px;
+        border: 1px solid #30363d;
+    }
 
-        .signal {
-            font-size: 18px;
-            margin-top: 5px;
-        }
+    select, input {
+        background: #0d1117;
+        color: white;
+        border: 1px solid #30363d;
+        padding: 6px;
+        border-radius: 5px;
+        margin-right: 10px;
+        margin-top: 5px;
+    }
 
-        .time {
-            font-size: 14px;
-            color: #888;
-            margin-top: 5px;
-        }
+    .signal-container {
+        margin: 20px;
+    }
 
-        .BUY { color: #00ff88; }
-        .SELL { color: #ff4444; }
-        .NEUTRAL { color: #bbbbbb; }
+    .signal-card {
+        background: #161b22;
+        border-left: 5px solid #58a6ff;
+        padding: 12px;
+        margin-bottom: 12px;
+        border-radius: 8px;
+        transition: 0.3s;
+    }
 
-        .daily-box {
-            margin-top: 10px;
-            padding: 10px;
-            background: #0f0f0f;
-            border-left: 3px solid #555;
-        }
+    .signal-card.flash {
+        animation: flash 1.2s ease-out;
+    }
 
-        .daily-title {
-            font-weight: bold;
-            margin-bottom: 4px;
-            color: #999;
-        }
+    @keyframes flash {
+        0% { background: #2ea04360; }
+        100% { background: #161b22; }
+    }
 
-    </style>
+    /* sinyal renkleri */
+    .green { border-color: #2ea043; }
+    .red { border-color: #f85149; }
+    .yellow { border-color: #e3b341; }
+
+    .chartCanvas {
+        width: 100%;
+        height: 45px;
+    }
+
+    @media (max-width: 600px) {
+        .signal-card { font-size: 13px; }
+        select, input { width: 100%; margin-bottom: 8px; }
+    }
+</style>
+
 </head>
-
 <body>
 
-<header>BIST Sinyal Dashboard</header>
+<h1>📈 BIST Algo Dashboard</h1>
 
-<div class="container">
-    <div id="signal-list">Sinyaller yükleniyor...</div>
+<div class="top-bar">
+    <div>🔄 Son Tarama: <span id="scanTime">Yükleniyor...</span></div>
+    <div>📥 Son Veri: <span id="fetchTime">Yükleniyor...</span></div>
+</div>
+
+<div class="filter-box">
+    <strong>Filtreler:</strong><br>
+    <select id="symbolFilter">
+        <option value="">Hisse Seç</option>
+    </select>
+
+    <select id="signalFilter">
+        <option value="">Sinyal Türü</option>
+        <option value="green">Yeşil Sinyal</option>
+        <option value="red">Kırmızı Sinyal</option>
+        <option value="yellow">Uyarı</option>
+    </select>
+
+    <input type="number" id="rsiMin" placeholder="RSI min" style="width:90px;">
+    <input type="number" id="rsiMax" placeholder="RSI max" style="width:90px;">
+</div>
+
+<div class="signal-container" id="signalContainer">
+    <p style="text-align:center;color:#777;">Sinyaller yükleniyor...</p>
 </div>
 
 <script>
-async function fetchSignals() {
-    try {
-        const res = await fetch("/latest-data");
-        const json = await res.json();
+async function loadSignals() {
+    const res = await fetch("/latest-data");
+    if (!res.ok) return;
+    const data = await res.json();
 
-        if (!json || !json.data) {
-            document.getElementById("signal-list").innerHTML = "Veri bekleniyor...";
-            return;
-        }
+    // dashboard çalışması için zorunlu: app.py'de doğru json gönderiliyor
+    const signals = data.signals || [];
+    const scan_time = data.last_scan || "—";
+    const fetch_time = data.last_fetch || "—";
 
-        const signals = json.data;
-        let html = "";
+    document.getElementById("scanTime").innerText = scan_time;
+    document.getElementById("fetchTime").innerText = fetch_time;
 
-        Object.keys(signals).forEach(sym => {
-            const s = signals[sym];
+    // Hisse filtre dropdown doldur
+    const symbolSelect = document.getElementById("symbolFilter");
+    const uniqueSymbols = [...new Set(signals.map(s => s.symbol))];
+    symbolSelect.innerHTML = `<option value="">Hisse Seç</option>`;
+    uniqueSymbols.forEach(sym => {
+        symbolSelect.innerHTML += `<option value="${sym}">${sym}</option>`;
+    });
 
-            const instantType = s.instant_signal?.type ?? "NEUTRAL";
-            const instantDesc = s.instant_signal?.description ?? "-";
-            const instantTime = s.instant_signal?.time ?? "";
-
-            const dailyType = s.daily_signal?.type ?? "NEUTRAL";
-            const dailyDesc = s.daily_signal?.description ?? "-";
-            const dailyTime = s.daily_signal?.time ?? "";
-
-            html += `
-            <div class="signal-box">
-                <div class="symbol">${sym}</div>
-
-                <div class="signal ${instantType}">
-                    🔹 Anlık Sinyal: ${instantType} — ${instantDesc}
-                </div>
-
-                <div class="time">⏱ ${instantTime}</div>
-
-                <div class="daily-box">
-                    <div class="daily-title">📅 Günlük Sinyal</div>
-                    <div class="signal ${dailyType}">
-                        ${dailyType} — ${dailyDesc}
-                    </div>
-                    <div class="time">${dailyTime}</div>
-                </div>
-            </div>
-            `;
-        });
-
-        document.getElementById("signal-list").innerHTML = html;
-
-    } catch (err) {
-        console.log("Hata:", err);
-    }
+    renderSignals(signals);
 }
 
-setInterval(fetchSignals, 5000);
-fetchSignals();
+function renderSignals(signals) {
+
+    const container = document.getElementById("signalContainer");
+    container.innerHTML = "";
+
+    if (signals.length === 0) {
+        container.innerHTML = `<p style='text-align:center;color:#777;'>Henüz sinyal yok...</p>`;
+        return;
+    }
+
+    const sFilter = document.getElementById("symbolFilter").value;
+    const sigFilter = document.getElementById("signalFilter").value;
+    const rsiMin = parseFloat(document.getElementById("rsiMin").value);
+    const rsiMax = parseFloat(document.getElementById("rsiMax").value);
+
+    signals.forEach(sig => {
+
+        // FİLTRELER
+        if (sFilter && sig.symbol !== sFilter) return;
+        if (sigFilter && sig.color !== sigFilter) return;
+        if (!isNaN(rsiMin) && sig.rsi < rsiMin) return;
+        if (!isNaN(rsiMax) && sig.rsi > rsiMax) return;
+
+        const div = document.createElement("div");
+        div.className = `signal-card ${sig.color} flash`;
+
+        div.innerHTML = `
+            <strong>${sig.symbol}</strong> — ${sig.type}<br>
+            Fiyat: <b>${sig.price}</b> | RSI: <b>${sig.rsi.toFixed(2)}</b> | Trend: <b>${sig.trend}</b><br>
+            <small>${sig.time}</small>
+            <canvas class="chartCanvas" id="chart_${sig.symbol}"></canvas>
+        `;
+
+        container.appendChild(div);
+
+        // Küçük sparkline chart (fiyat yönü gösterir)
+        drawMiniChart(`chart_${sig.symbol}`, sig.spark || []);
+    });
+}
+
+function drawMiniChart(canvasId, data) {
+    if (!data || data.length === 0) return;
+
+    const canvas = document.getElementById(canvasId);
+    const ctx = canvas.getContext("2d");
+
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    const max = Math.max(...data);
+    const min = Math.min(...data);
+
+    ctx.beginPath();
+    data.forEach((val, i) => {
+        let x = (i / (data.length - 1)) * w;
+        let y = h - ((val - min) / (max - min)) * h;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+
+    ctx.strokeStyle = data[data.length - 1] >= data[0] ? "#2ea043" : "#f85149";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+}
+
+setInterval(loadSignals, 4000);
+loadSignals();
+
 </script>
 
 </body>
