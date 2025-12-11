@@ -1,129 +1,138 @@
-# signal_engine.py
+import math
 from datetime import datetime
-from utils import to_tr_timezone, nearest_support_resistance_from_history
+from utils import to_tr_timezone
 
-def format_ma_icon(v):
-    # v is "price_above" or "price_below" or "golden_cross"/"death_cross"
-    if v == "price_above":
-        return "🔼"
-    if v == "price_below":
-        return "🔻"
-    if v == "golden_cross":
-        return "⚔️"
-    if v == "death_cross":
-        return "⚔️"
-    return ""
+# ----------------------------------------------------
+#  YARDIMCI FONKSİYONLAR (SİNYAL EMOJİ DÖNÜŞÜMLERİ)
+# ----------------------------------------------------
 
+def ma_arrow(direction):
+    """MA yönünü emojiye dönüştürür."""
+    if direction == "above":      # price above MA
+        return "🔼 yukarı kırdı"
+    if direction == "below":      # price below MA
+        return "🔻 aşağı kırdı"
+    return "➡️ yatay"
+
+def format_support_resistance(sr):
+    """Destek/direnç sözlüğünü yazıya döker."""
+    if sr is None:
+        return "Veri yok"
+
+    return (
+        f"  • 15m → Destek: {sr['15m']['support']} | Direnç: {sr['15m']['resistance']}\n"
+        f"  • 1h → Destek: {sr['1h']['support']} | Direnç: {sr['1h']['resistance']}\n"
+        f"  • 4h → Destek: {sr['4h']['support']} | Direnç: {sr['4h']['resistance']}\n"
+        f"  • 1D → Destek: {sr['1D']['support']} | Direnç: {sr['1D']['resistance']}"
+    )
+
+def signal_emoji(sig):
+    if sig == "buy": return "🟢⬆️"
+    if sig == "sell": return "🔴⬇️"
+    return "⚪"
+
+# ----------------------------------------------------
+#                ANA SİNYAL MOTORU
+# ----------------------------------------------------
 def process_signals(item):
-    """
-    item: dict from fetch_bist.py for one symbol
-    returns: list of tuples [(sig_key, message)] - usually single tuple per symbol (combined)
-    """
-    out = []
-    try:
-        sym = item.get("symbol")
-        price = item.get("current_price")
-        rsi = item.get("RSI")
-        last = item.get("last_signal")
-        support_break = item.get("support_break")
-        resistance_break = item.get("resistance_break")
-        green_11 = item.get("green_mum_11")
-        green_15 = item.get("green_mum_15")
-        three_peak = item.get("three_peak_break")
-        ma_breaks = item.get("ma_breaks", {})
-        ma_values = item.get("ma_values", {})
+    signals = []
+    symbol = item.get("symbol")
+    price = item.get("price")
+    rsi = item.get("rsi")
+    volume = item.get("volume")
+    change_percent = item.get("change_percent")
+    sr_levels = item.get("support_resistance")  # 15m/1h/4h/1D bu objede olmalı
 
-        now_tr = to_tr_timezone(datetime.utcnow())
-        now_str = now_tr.strftime("%Y-%m-%d %H:%M:%S") if now_tr else datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    tr_time = to_tr_timezone(datetime.utcnow())
+    ts = tr_time.strftime("%Y-%m-%d %H:%M:%S")
 
-        lines = []
-        # Header
-        lines.append(f"Hisse Takip: {sym}")
-        # AL / SAT
-        if last == "AL":
-            lines.append(f"🟢 ↑ AL sinyali! Fiyat: {price:.4f} TL | RSI: {rsi:.2f}")
-        elif last == "SAT":
-            lines.append(f"🔴 ↓ SAT sinyali! Fiyat: {price:.4f} TL | RSI: {rsi:.2f}")
+    # ----------------------------------------------------
+    # ÖRNEK: AL / SAT / FORMASYON / MUM
+    # ----------------------------------------------------
 
-        # RSI thresholds (strong alerts)
-        if rsi is not None:
-            if rsi < 20:
-                lines.append(f"🔻 RSI {rsi:.2f} < 20")
-            elif rsi > 80:
-                lines.append(f"🔺 RSI {rsi:.2f} > 80")
+    # BUY EXAMPLE
+    if item.get("buy_signal"):
+        sig_key = f"BUY-{symbol}"
+        message = (
+            f"Hisse Takip: {symbol}\n"
+            f"{signal_emoji('buy')} AL sinyali!\n"
+            f"Fiyat: {price} TL | RSI: {rsi}\n"
+            f"Hacim: {volume}\n"
+            f"Günlük Değişim: %{change_percent}\n"
+        )
+        signals.append((sig_key, message))
 
-        # Support / Resistance breaks
-        if support_break:
-            lines.append("🟢 Destek kırılımı!")
-        if resistance_break:
-            lines.append("🔴 Direnç kırılımı!")
+    # SELL EXAMPLE
+    if item.get("sell_signal"):
+        sig_key = f"SELL-{symbol}"
+        message = (
+            f"Hisse Takip: {symbol}\n"
+            f"{signal_emoji('sell')} SAT sinyali!\n"
+            f"Fiyat: {price} TL | RSI: {rsi}\n"
+            f"Hacim: {volume}\n"
+            f"Günlük Değişim: %{change_percent}\n"
+        )
+        signals.append((sig_key, message))
 
-        # Three peak
-        if three_peak:
-            lines.append("🔥🔥 3lü tepe kırılımı!")
+    # 3’lü tepe
+    if item.get("triple_top"):
+        signals.append((
+            f"TT-{symbol}",
+            f"Hisse Takip: {symbol}\n🔥🔥 3'lü tepe kırılımı!"
+        ))
 
-        # 11:00 / 15:00 green candles
-        if green_11:
-            lines.append("✅ 11:00'de yeşil mum")
-        if green_15:
-            lines.append("✅ 15:00'te yeşil mum")
+    # 11:00 Y E Ş İ L M U M
+    if item.get("green_1100"):
+        signals.append((
+            f"11MUM-{symbol}",
+            f"Hisse Takip: {symbol}\n✅ 11:00'da yeşil mum başladı"
+        ))
 
-        # MA infos: show icons and nearest values
-        ma_lines = []
-        for key, v in ma_breaks.items():
-            # key like "MA20" or "20x50"
-            ic = format_ma_icon(v)
-            ma_val = ma_values.get(int(key.replace("MA","")), None) if key.startswith("MA") else None
-            if v:
-                if key.startswith("MA"):
-                    ma_lines.append(f"{ic} {key}: {v.replace('_',' ')}")
-                else:
-                    # cross
-                    ma_lines.append(f"{ic} {key}: {v}")
-        if ma_lines:
-            lines.append("MA Durumları: " + " | ".join(ma_lines))
+    # 15:00 YESIL MUM
+    if item.get("green_1500"):
+        signals.append((
+            f"15MUM-{symbol}",
+            f"Hisse Takip: {symbol}\n✅ 15:00'da yeşil mum başladı"
+        ))
 
-        # Kombine A-type conservative rule (isim => "Kombine Sinyal")
-        combined_ok = False
-        try:
-            if (green_11 or green_15) and (last == "AL" or (rsi is not None and rsi < 30)):
-                combined_ok = True
-        except Exception:
-            combined_ok = False
+    # ----------------------------------------------------
+    # MA YÖNLERİNİ MESAJ FORMATINA ÇEVİR
+    # ----------------------------------------------------
+    ma_msg = (
+        f"🔍 MA Durumları:\n"
+        f"• MA20 → {ma_arrow(item.get('ma20'))}\n"
+        f"• MA50 → {ma_arrow(item.get('ma50'))}\n"
+        f"• MA100 → {ma_arrow(item.get('ma100'))}\n"
+        f"• MA200 → {ma_arrow(item.get('ma200'))}"
+    )
 
-        if combined_ok:
-            lines.append("🚀🚀🚀 Kombine Sinyal (Günlük & Kısa periyot uyumu)")
+    # ----------------------------------------------------
+    # DESTEK – DİRENÇ BİLGİLERİ
+    # ----------------------------------------------------
+    sr_msg = "📉 Destek – Direnç Düzeyleri:\n" + format_support_resistance(sr_levels)
 
-        # Destek/Direnç - hesapla kısa geçmişten (1h / 4h / 1d / 1w için fetch_bist tarafından gelen df yoksa fallback)
-        # If fetch_bist provided a 'history' DataFrame in item, use it; else skip.
-        supp_res_lines = []
-        hist_map = item.get("history", {})  # may contain {"1h": df, "4h": df, "1d": df, "1w": df}
-        # if item doesn't include history, process_signals will skip nearest SR
-        for tf in ("1h","4h","1d","1w"):
-            df_tf = hist_map.get(tf)
-            if df_tf is not None:
-                try:
-                    s, r = nearest_support_resistance_from_history(df_tf)
-                    if s is not None or r is not None:
-                        s_str = f"{s:.4f}" if s is not None else "-"
-                        r_str = f"{r:.4f}" if r is not None else "-"
-                        supp_res_lines.append(f"{tf}: Destek {s_str} / Direnç {r_str}")
-                except Exception:
-                    pass
-        if supp_res_lines:
-            lines.append("Yakın S/R: " + " | ".join(supp_res_lines))
+    # ----------------------------------------------------
+    # KOMBİNE SİNYAL
+    # ----------------------------------------------------
+    if item.get("combined_signal"):
+        final_msg = (
+            f"Hisse Takip: {symbol}\n"
+            f"🚀🚀🚀 Kombine Sinyal!\n"
+            f"Fiyat: {price} TL | RSI: {rsi}\n"
+            f"Hacim: {volume}\n"
+            f"Günlük Değişim: %{change_percent}\n\n"
+            f"{ma_msg}\n\n"
+            f"{sr_msg}\n\n"
+            f"Sinyal zamanı (TR): {ts}"
+        )
+        signals.append((f"COMBO-{symbol}", final_msg))
 
-        # Footer timestamp
-        lines.append(f"Sinyal zamanı (TR): {now_str}")
+    # ----------------------------------------------------
+    # TÜM MESAJLAR SON HALİ
+    # ----------------------------------------------------
+    final_signals = []
+    for key, msg in signals:
+        clean = msg + f"\n\nSinyal zamanı (TR): {ts}"
+        final_signals.append((key, clean))
 
-        # Build single message
-        full_msg = "\n".join(lines)
-        # Choose sig_key for dedupe: symbol + "COMBINED_A" or generic
-        sig_key = "COMBINED_ALL"
-
-        out.append((sig_key, full_msg))
-    except Exception as e:
-        # In app we'll log errors per-symbol
-        raise e
-
-    return out
+    return final_signals
