@@ -1,62 +1,140 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="tr">
 <head>
-  <meta charset="utf-8">
-  <title>BIST Tarayıcı Dashboard</title>
-  <style>
-    body{font-family: Arial, Helvetica, sans-serif; margin:16px}
-    table{border-collapse:collapse; width:100%}
-    th,td{border:1px solid #ddd; padding:8px; text-align:center}
-    th{background:#f4f4f4}
-    .small{font-size:0.9em; color:#666}
-  </style>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BIST Sinyal Dashboard</title>
+
+    <style>
+        body {
+            background: #111;
+            color: #eee;
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+
+        header {
+            background: #222;
+            padding: 15px;
+            text-align: center;
+            font-size: 24px;
+            font-weight: bold;
+            border-bottom: 2px solid #444;
+        }
+
+        .container {
+            padding: 20px;
+        }
+
+        .signal-box {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 8px;
+        }
+
+        .symbol {
+            font-size: 20px;
+            font-weight: bold;
+        }
+
+        .signal {
+            font-size: 18px;
+            margin-top: 5px;
+        }
+
+        .time {
+            font-size: 14px;
+            color: #888;
+            margin-top: 5px;
+        }
+
+        .BUY { color: #00ff88; }
+        .SELL { color: #ff4444; }
+        .NEUTRAL { color: #bbbbbb; }
+
+        .daily-box {
+            margin-top: 10px;
+            padding: 10px;
+            background: #0f0f0f;
+            border-left: 3px solid #555;
+        }
+
+        .daily-title {
+            font-weight: bold;
+            margin-bottom: 4px;
+            color: #999;
+        }
+
+    </style>
 </head>
+
 <body>
-  <h2>BIST Tarayıcı</h2>
-  <div class="small">Son güncelleme: <span id="updated">-</span></div>
-  <table id="tbl">
-    <thead>
-      <tr><th>Sembol</th><th>Fiyat</th><th>RSI</th><th>Trend</th><th>Günlük</th><th>Hacim</th><th>Sinyaller</th></tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+
+<header>BIST Sinyal Dashboard</header>
+
+<div class="container">
+    <div id="signal-list">Sinyaller yükleniyor...</div>
+</div>
 
 <script>
-async function refresh(){
-  try{
-    const res = await fetch('/api');
-    const js = await res.json();
-    document.getElementById('updated').innerText = new Date(js.timestamp*1000).toLocaleString();
-    const tbody = document.querySelector('#tbl tbody');
-    tbody.innerHTML = '';
-    if(js.data && js.data.length){
-      js.data.forEach(it=>{
-        const row = document.createElement('tr');
-        const signals = [];
-        if(it.RSI !== undefined) signals.push('RSI:'+it.RSI.toFixed(2));
-        if(it.last_signal) signals.push(it.last_signal);
-        if(it.support_break) signals.push('Support↓');
-        if(it.resistance_break) signals.push('Resistance↑');
-        if(it.three_peak_break) signals.push('3peak');
-        if(it.green_mum_11) signals.push('G11');
-        if(it.green_mum_15) signals.push('G15');
-        if(it.ma_breaks){
-          Object.keys(it.ma_breaks).forEach(k=>{
-            const v = it.ma_breaks[k];
-            if(v) signals.push(`${k}:${v}`);
-          });
+async function fetchSignals() {
+    try {
+        const res = await fetch("/latest-data");
+        const json = await res.json();
+
+        if (!json || !json.data) {
+            document.getElementById("signal-list").innerHTML = "Veri bekleniyor...";
+            return;
         }
-        row.innerHTML = `<td>${it.symbol}</td><td>${it.current_price?.toFixed?.(2) ?? it.current_price}</td><td>${it.RSI?.toFixed?.(2) ?? '-'}</td><td>${it.trend ?? '-'}</td><td>${it.daily_change ?? '-'}</td><td>${it.volume ?? '-'}</td><td>${signals.join(' | ')}</td>`;
-        tbody.appendChild(row);
-      });
+
+        const signals = json.data;
+        let html = "";
+
+        Object.keys(signals).forEach(sym => {
+            const s = signals[sym];
+
+            const instantType = s.instant_signal?.type ?? "NEUTRAL";
+            const instantDesc = s.instant_signal?.description ?? "-";
+            const instantTime = s.instant_signal?.time ?? "";
+
+            const dailyType = s.daily_signal?.type ?? "NEUTRAL";
+            const dailyDesc = s.daily_signal?.description ?? "-";
+            const dailyTime = s.daily_signal?.time ?? "";
+
+            html += `
+            <div class="signal-box">
+                <div class="symbol">${sym}</div>
+
+                <div class="signal ${instantType}">
+                    🔹 Anlık Sinyal: ${instantType} — ${instantDesc}
+                </div>
+
+                <div class="time">⏱ ${instantTime}</div>
+
+                <div class="daily-box">
+                    <div class="daily-title">📅 Günlük Sinyal</div>
+                    <div class="signal ${dailyType}">
+                        ${dailyType} — ${dailyDesc}
+                    </div>
+                    <div class="time">${dailyTime}</div>
+                </div>
+            </div>
+            `;
+        });
+
+        document.getElementById("signal-list").innerHTML = html;
+
+    } catch (err) {
+        console.log("Hata:", err);
     }
-  }catch(e){
-    console.error(e);
-  } finally{
-    setTimeout(refresh, 60000);
-  }
 }
-refresh();
+
+setInterval(fetchSignals, 5000);
+fetchSignals();
 </script>
+
 </body>
 </html>
