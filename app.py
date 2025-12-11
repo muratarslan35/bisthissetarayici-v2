@@ -1,261 +1,168 @@
 # app.py
 import os
-import sys
 import threading
 import time
-import requests
-from datetime import datetime, timezone
-from flask import Flask, jsonify, send_from_directory, request
+import json
+from datetime import datetime, timezone, timedelta
+from flask import Flask, jsonify, send_from_directory, request, make_response
+try:
+    from flask_cors import CORS
+except Exception:
+    CORS = None
+
 from fetch_bist import fetch_bist_data
-from self_ping import start_self_ping
+from signal_engine import process_signals
 from utils import to_tr_timezone
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder="static", static_url_path="/")
+if CORS:
+    CORS(app)
 
 # --- GLOBALS ---
-LATEST_DATA = {"status": "init", "data": None, "timestamp": None}
+LATEST_DATA = {"status": "init", "data": [], "last_scan": None, "last_fetch": None}
 data_lock = threading.Lock()
 
-# TELEGRAM (kullanıcı istediği gibi token burada)
-TELEGRAM_TOKEN = "8588829956:AAEK2-wa75CoHQPjPFEAUU_LElRBduC-_TU"
-# Buraya elle ekleyebileceğin ID'leri koy:
-CHAT_IDS = [
-    661794787,
-    # 12345678, 87654321
-]
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8588829956:AAEK2-wa75CoHQPjPFEAUU_LElRBduC-_TU")
+# default CHAT_IDS - sen bunlari render env olarak da koyabilirsin
+CHAT_IDS = os.getenv("CHAT_IDS", None)
+if CHAT_IDS:
+    try:
+        CHAT_IDS = [int(x.strip()) for x in CHAT_IDS.split(",")]
+    except:
+        CHAT_IDS = [661794787]
+else:
+    CHAT_IDS = [661794787]  # fallback
 
-# Bildirimleri tekrarlamamak için saklanan set/dict
-# format: sent_signals[symbol] = set(of signal keys)
-sent_signals = {}
-# günlük tekil (1D) bildirimi kontrolü için tarih
-last_daily_reset = None
+SENT_SIGNALS = {}  # { "SYMBOL": {"signal_key": timestamp_sent, ... }, ... }
+SENT_LOCK = threading.Lock()
 
-# Helper: telegram gönder (loglayıp hataları gösterir)
-def telegram_send(text):
+# Telegram helper
+import requests
+def telegram_send(text, parse_mode="HTML"):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"text": text, "parse_mode": parse_mode}
     headers = {"Content-Type": "application/json"}
     for cid in CHAT_IDS:
+        payload["chat_id"] = cid
         try:
-            payload = {"chat_id": cid, "text": text, "parse_mode": "HTML"}
-            r = requests.post(url, json=payload, timeout=8)
-            # log response for debugging
-            app.logger.info(f"[TELEGRAM] to {cid} {r.status_code} {r.text}")
+            r = requests.post(url, json=payload, timeout=6)
+            # log
+            print("[APP] Telegram ->", cid, r.status_code, r.text)
+            # if unauthorized, stop attempting repeatedly
             if r.status_code == 401:
-                app.logger.error("[TELEGRAM] Unauthorized token or bot blocked by chat_id.")
+                print("[APP] Telegram unauthorized. Check TELEGRAM_TOKEN.")
         except Exception as e:
-            app.logger.exception("[TELEGRAM] send failed:")
+            print("[APP] Telegram send error:", e)
 
-# Helper - biçimlendirici: MA durumunu okunur hâle getir
-def fmt_ma_breaks(ma_breaks):
-    parts = []
-    for k, v in ma_breaks.items():
-        if v is None:
-            parts.append(f"{k}: N/A")
-        else:
-            # v expected "above"/"below" or "golden_cross"/"death_cross"
-            if v in ("above", "price_above"):
-                parts.append(f"{k}: ÜSTTE")
-            elif v in ("below", "price_below"):
-                parts.append(f"{k}: ALTI")
-            elif v == "golden_cross":
-                parts.append(f"{k}: GOLDEN CROSS")
-            elif v == "death_cross":
-                parts.append(f"{k}: DEATH CROSS")
-            else:
-                parts.append(f"{k}: {v}")
-    return " | ".join(parts)
+# Utility: whether we should send this specific signal (dedupe)
+def should_send_signal(symbol, sig_key, dedupe_seconds=60*60*24):
+    # sig_key: e.g. "RSI_AL", "MA20_above", "DAILY_COMBINED"
+    now = int(time.time())
+    with SENT_LOCK:
+        sym_map = SENT_SIGNALS.setdefault(symbol, {})
+        last = sym_map.get(sig_key)
+        if last is None:
+            sym_map[sig_key] = now
+            return True
+        # if older than dedupe_seconds, allow resend
+        if now - last > dedupe_seconds:
+            sym_map[sig_key] = now
+            return True
+        return False
 
-# Sinyal ana işleme: gelen veri içindeki koşulları değerlendirir, mesaj hazırlar
-def process_and_notify(data_list):
-    global sent_signals, last_daily_reset
+# Reset daily signals at midnight TR
+def daily_reset_loop():
+    while True:
+        now_tr = to_tr_timezone(datetime.utcnow())
+        # compute seconds until next midnight TR
+        next_midnight = (now_tr + timedelta(days=1)).replace(hour=0, minute=0, second=5, microsecond=0)
+        sleep_seconds = (next_midnight - now_tr).total_seconds()
+        time.sleep(max(5, sleep_seconds))
+        with SENT_LOCK:
+            SENT_SIGNALS.clear()
+            print("[APP] Daily SENT_SIGNALS cleared at TR midnight.")
 
-    # günlük reset (TR günü) - sent_daily set sıfırlama
-    now_tr = to_tr_timezone(datetime.now(timezone.utc))
-    today_date = now_tr.date()
-    if last_daily_reset != today_date:
-        # reset günlük tekil bildiriler (günlük-only sinyaller için)
-        sent_signals = {}
-        last_daily_reset = today_date
-        app.logger.info("[APP] Daily sent_signals reset.")
-
-    for item in data_list:
-        symbol = item.get("symbol")
-        if not symbol:
-            continue
-
-        # set up record for symbol
-        if symbol not in sent_signals:
-            sent_signals[symbol] = set()
-
-        rsi = item.get("RSI")
-        last_signal = item.get("last_signal")
-        support_break = item.get("support_break")
-        resistance_break = item.get("resistance_break")
-        three_peak = item.get("three_peak_break")
-        green_11 = item.get("green_mum_11")
-        green_15 = item.get("green_mum_15")
-        ma_breaks = item.get("ma_breaks", {})  # dict MA20..MA200 / above/below/cross
-        ma_values = item.get("ma_values", {})
-        trend = item.get("trend")
-        price = item.get("current_price")
-        daily_change = item.get("daily_change")
-        volume = item.get("volume")
-        signal_time_raw = item.get("signal_time")  # expected in UTC string or aware dt
-
-        # Normalize time -> TR
-        try:
-            if isinstance(signal_time_raw, str):
-                # try parse ISO-like first
-                dt = datetime.fromisoformat(signal_time_raw)
-            elif isinstance(signal_time_raw, datetime):
-                dt = signal_time_raw
-            else:
-                dt = datetime.now(timezone.utc)
-        except Exception:
-            dt = datetime.now(timezone.utc)
-        dt_tr = to_tr_timezone(dt.astimezone(timezone.utc))
-        dt_str = dt_tr.strftime("%Y-%m-%d %H:%M:%S (TR)")
-
-        # build message parts according to user's full algorithm set
-        messages = []
-
-        # RSI extremes (>=80 or <=20) - use thresholds from user's spec (20/80)
-        if rsi is not None:
-            try:
-                rsi_val = float(rsi)
-                if rsi_val < 20 and "RSI_<20" not in sent_signals[symbol]:
-                    messages.append(f"🔻 {symbol} RSI {rsi_val:.2f} < 20 (AL Uyarısı)")
-                    sent_signals[symbol].add("RSI_<20")
-                elif rsi_val > 80 and "RSI_>80" not in sent_signals[symbol]:
-                    messages.append(f"🔺 {symbol} RSI {rsi_val:.2f} > 80 (SAT Uyarısı)")
-                    sent_signals[symbol].add("RSI_>80")
-            except:
-                pass
-
-        # AL / SAT sinyali (from algorithm)
-        if last_signal and last_signal in ("AL","SAT"):
-            key = f"SIGNAL_{last_signal}"
-            if key not in sent_signals[symbol]:
-                messages.append(f"{'🟢' if last_signal=='AL' else '🔴'} {symbol} - {last_signal} sinyali (algoritma).")
-                sent_signals[symbol].add(key)
-
-        # support / resistance breaks
-        if support_break and "SUPPORT_BREAK" not in sent_signals[symbol]:
-            messages.append(f"🟢 {symbol} destek kırıldı.")
-            sent_signals[symbol].add("SUPPORT_BREAK")
-        if resistance_break and "RESISTANCE_BREAK" not in sent_signals[symbol]:
-            messages.append(f"🔴 {symbol} direnç kırıldı.")
-            sent_signals[symbol].add("RESISTANCE_BREAK")
-
-        # three peak
-        if three_peak and "THREE_PEAK" not in sent_signals[symbol]:
-            messages.append(f"⚠️ {symbol} üç tepe kırılımı gerçekleşti.")
-            sent_signals[symbol].add("THREE_PEAK")
-
-        # 11 and 15 green candles
-        if green_11 and "GREEN_11" not in sent_signals[symbol]:
-            messages.append(f"🟢 {symbol} 11:00'de yeşil mum oluştu.")
-            sent_signals[symbol].add("GREEN_11")
-        if green_15 and "GREEN_15" not in sent_signals[symbol]:
-            messages.append(f"🟢 {symbol} 15:00'te yeşil mum oluştu.")
-            sent_signals[symbol].add("GREEN_15")
-
-        # MA breaks / crosses and MA values summary (only notify if cross or changed and not sent already)
-        # We'll notify for crosses (20x50 golden/death) and indicate MA positions
-        if isinstance(ma_breaks, dict):
-            # Cross
-            cross_val = ma_breaks.get("20x50")
-            if cross_val and f"MA20x50_{cross_val}" not in sent_signals[symbol]:
-                messages.append(f"📈 {symbol} MA20x50: {cross_val.replace('_',' ').upper()}.")
-                sent_signals[symbol].add(f"MA20x50_{cross_val}")
-
-        # Additionally we include MA position summary in the message but don't use as one-off gating
-        ma_summary = fmt_ma_breaks(ma_breaks)
-
-        # Daily composite signal (A type): combine conditions as user asked (1D + 4H + 15m logic)
-        # The fetch side should supply flags for 'daily_green_count' and 'h4_green_count' etc if available.
-        # We'll check simple combination: if today has daily green previous and now second green + 4H green etc.
-        # The fetch algorithm must set item['composite_signal'] = "A" when conditions met; if present, notify once.
-        comp = item.get("composite_signal")
-        if comp and f"COMPOSITE_{comp}" not in sent_signals[symbol]:
-            messages.append(f"🔥 {symbol} KOMPOZİT SİNYAL {comp} tetiklendi.")
-            sent_signals[symbol].add(f"COMPOSITE_{comp}")
-
-        # If there are messages to send -> build final text including MA summary, price, trend, RSI, time
-        if messages:
-            header = f"{' / '.join(messages)}\n"
-            body = f"Fiyat: {price} TL | Trend: {trend} | RSI: {rsi}\nGünlük değişim: {daily_change} | Hacim: {volume}\nMA: {ma_summary}\nSinyal zamanı: {dt_str}"
-            final = header + body
-            # send once per symbol per message (but there may be multiple message pieces)
-            telegram_send(final)
-
-    # end for
-
-# Background update loop (run in daemon thread)
+# Background update loop
 def update_loop():
     global LATEST_DATA
-    app.logger.info("[APP] Background update_loop starting...")
-    # send a startup notification once
-    try:
-        telegram_send("🤖 Sistem başlatıldı ve tarama başlıyor (Render).")
-    except Exception:
-        app.logger.exception("[APP] Startup telegram send failed.")
-
+    print("[APP] Background update_loop starting...")
+    # initial notify
+    telegram_send("🤖 Sistem başlatıldı ve aktif! (Bot başlatıldı)")
     while True:
         try:
-            data = fetch_bist_data()  # list of dicts
+            start_fetch = time.time()
+            results = fetch_bist_data()  # list of dicts per symbol
+            fetch_done = time.time()
+            processed = []
+            # process signals (this will evaluate combined daily logic etc.)
+            for item in results:
+                # process_signals returns list of (sig_key, message) to send OR empty
+                signals = process_signals(item)
+                # for each unique signal, check dedupe
+                for sig_key, message in signals:
+                    if should_send_signal(item["symbol"], sig_key):
+                        telegram_send(message)
+                processed.append(item)
             with data_lock:
-                LATEST_DATA = {"status": "ok", "timestamp": int(time.time()), "data": data}
-            # process signals & notify
-            try:
-                process_and_notify(data)
-            except Exception:
-                app.logger.exception("[APP] process_and_notify error")
-        except Exception:
-            app.logger.exception("[APP] fetch_bist_data error")
+                LATEST_DATA = {
+                    "status": "ok",
+                    "timestamp": int(time.time()),
+                    "last_scan": to_tr_timezone(datetime.utcnow()).strftime("%Y-%m-%d %H:%M:%S"),
+                    "last_fetch": int(fetch_done),
+                    "data": processed
+                }
+            print(f"[APP] Update loop finished. symbols={len(processed)} scan_time={int(time.time()-start_fetch)}s")
+        except Exception as e:
+            print("[APP] update error:", e)
             with data_lock:
-                LATEST_DATA = {"status": "error", "timestamp": int(time.time()), "error": "fetch error"}
-        time.sleep(60)  # 60s döngü
+                LATEST_DATA["status"] = "error"
+                LATEST_DATA["error"] = str(e)
+        # interval: 60s (configurable via env)
+        interval = int(os.getenv("FETCH_INTERVAL", "60"))
+        time.sleep(interval)
 
-# Ensure background starts only once per worker (use before_request with flag)
-_background_started = False
+# Hook to start background threads once (works for gunicorn too)
+started = False
 @app.before_request
-def ensure_background_started():
-    global _background_started
-    if not _background_started:
-        _background_started = True
-        app.logger.info("[APP] Starting background thread from before_request...")
+def start_background_once():
+    global started
+    if not started:
+        started = True
         t = threading.Thread(target=update_loop, daemon=True)
         t.start()
-        # start self ping thread (if SELF_URL set in env)
+        t2 = threading.Thread(target=daily_reset_loop, daemon=True)
+        t2.start()
+        # start self ping (optional)
+        from self_ping import start_self_ping
         start_self_ping()
-        app.logger.info("[APP] Self-ping started (if SELF_URL set).")
+        print("[APP] Background threads started from before_request.")
 
-# Routes
+# --- routes ---
 @app.route("/")
-def dashboard():
-    # serve static dashboard if present
-    if os.path.exists("static/dashboard.html"):
-        return send_from_directory("static", "dashboard.html")
-    return "<h3>BIST Tarayıcı</h3><p>Dashboard dosyası (static/dashboard.html) bulunamadı.</p>"
+def index():
+    # serve static dashboard
+    return send_from_directory("static", "dashboard.html")
 
-@app.route("/api")
-def api():
+@app.route("/latest-data")
+def latest_data():
     with data_lock:
         return jsonify(LATEST_DATA)
 
-# Allow manual trigger (for debugging)
-@app.route("/trigger")
-def trigger_now():
-    # immediate fetch & notify (rate-limit not enforced here)
-    try:
-        data = fetch_bist_data()
-        with data_lock:
-            LATEST_DATA.update({"status":"ok","timestamp":int(time.time()), "data":data})
-        process_and_notify(data)
-        return jsonify({"result":"ok","fetched":len(data)})
-    except Exception as e:
-        return jsonify({"result":"error","err":str(e)}), 500
+@app.route("/api")
+def api_root():
+    # legacy API; return same
+    with data_lock:
+        return jsonify(LATEST_DATA)
 
-# Standard gunicorn entry: app
-# Note: do NOT put update_loop under if __name__ == "__main__" because gunicorn will not call it.
+@app.route("/health")
+def health():
+    return make_response(jsonify({"status":"ok"}), 200)
+
+if __name__ == "__main__":
+    # local run fallback
+    print("[APP] Starting dev server...")
+    threading.Thread(target=update_loop, daemon=True).start()
+    threading.Thread(target=daily_reset_loop, daemon=True).start()
+    from self_ping import start_self_ping
+    start_self_ping()
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
