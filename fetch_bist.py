@@ -1,144 +1,193 @@
 # fetch_bist.py
-import os
 import time
 import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime, timedelta
-from utils import FALLBACK_SYMBOLS, calculate_rsi, moving_averages, detect_three_peaks, detect_support_resistance_break, to_tr_timezone
+from datetime import datetime, timezone, timedelta
+from utils import FALLBACK_SYMBOLS, calculate_rsi, moving_averages, detect_three_peaks, detect_support_resistance_break
 
-# Try to get BIST30/BIST100 list from API, else fallback
+# use yfinance with progress=False to avoid noisy output
+yf.pdr_override = False  # not using pandas-datareader; just ensure no override warnings
+
 def get_bist_symbols():
+    """
+    Attempts to fetch BIST30 + BIST100 symbols from isyatirim API,
+    falls back to FALLBACK_SYMBOLS from utils if failure.
+    """
     try:
         url = "https://api.isyatirim.com.tr/index/indexsectorperformance"
         r = requests.get(url, timeout=6)
         r.raise_for_status()
         js = r.json()
-        bist30, bist100 = [], []
+        symbols = []
         for item in js:
-            if item.get("indexCode") == "XU030":
-                for c in item.get("components", []):
-                    sym = c.get("symbol")
-                    if sym:
-                        bist30.append(sym + ".IS")
-            if item.get("indexCode") == "XU100":
-                for c in item.get("components", []):
-                    sym = c.get("symbol")
-                    if sym:
-                        bist100.append(sym + ".IS")
-        combined = list(dict.fromkeys(bist30 + bist100))
-        if combined:
-            return combined
+            idx = item.get("indexCode")
+            comps = item.get("components", [])
+            for c in comps:
+                sym = c.get("symbol")
+                if sym:
+                    symbols.append(sym if sym.endswith(".IS") else sym + ".IS")
+        symbols = list(dict.fromkeys(symbols))
+        if symbols:
+            return symbols
     except Exception as e:
+        # fallback
         print("get_bist_symbols fallback:", e)
-    # fallback provided list
+    # final fallback: use provided list (already in utils)
     return FALLBACK_SYMBOLS.copy()
 
-def safe_extract_single_ticker(df, sym):
-    # yfinance sometimes returns multi-index; normalize
+def fetch_one_symbol(sym):
+    """
+    Fetch 15m bars for last 7 days for a single symbol.
+    Return dict with all flags used by app.
+    """
+    try:
+        df = yf.download(sym, period="7d", interval="15m", auto_adjust=True, progress=False)
+    except Exception as e:
+        raise
+
+    # handle multiindex or empty frames
+    if df.empty:
+        raise ValueError("empty df")
+
+    # Normalize when multiindex returns (not expected for single ticker)
     if isinstance(df.columns, pd.MultiIndex):
-        # try to extract (Close, sym) etc.
-        try:
-            df_t = pd.DataFrame({
+        # try to extract by (field, sym)
+        if ("Close", sym) in df.columns:
+            df = pd.DataFrame({
                 "Open": df[("Open", sym)],
                 "High": df[("High", sym)],
                 "Low": df[("Low", sym)],
                 "Close": df[("Close", sym)],
                 "Volume": df[("Volume", sym)]
             })
-            return df_t
-        except Exception:
-            return None
-    else:
-        # normal columns
-        if "Close" not in df.columns:
-            return None
-        cols = [c for c in ["Open","High","Low","Close","Volume"] if c in df.columns]
-        df_t = df[cols].copy()
-        return df_t
+        else:
+            # unexpected structure
+            raise ValueError("multiindex unexpected")
+
+    # Basic cleanup
+    df = df.dropna(how="all")
+    if df.empty or "Close" not in df.columns:
+        raise ValueError("no Close column")
+
+    # Indicators
+    df["RSI"] = calculate_rsi(df["Close"])
+    rsi_val = float(df["RSI"].iloc[-1])
+
+    ma_vals = moving_averages(df, windows=[20,50,100,200])
+    current_price = float(df["Close"].iloc[-1])
+
+    # MA relative state: "above"/"below"
+    ma_breaks = {}
+    for k, v in ma_vals.items():
+        if v is None:
+            ma_breaks[f"MA{str(k)}"] = None
+        else:
+            ma_breaks[f"MA{str(k)}"] = "above" if current_price > v else "below"
+
+    # detect 20x50 cross (golden/death)
+    try:
+        ma20 = df["Close"].rolling(20, min_periods=1).mean()
+        ma50 = df["Close"].rolling(50, min_periods=1).mean()
+        if len(ma20) >= 2 and len(ma50) >= 2:
+            if ma20.iloc[-2] <= ma50.iloc[-2] and ma20.iloc[-1] > ma50.iloc[-1]:
+                ma_breaks["20x50"] = "golden_cross"
+            elif ma20.iloc[-2] >= ma50.iloc[-2] and ma20.iloc[-1] < ma50.iloc[-1]:
+                ma_breaks["20x50"] = "death_cross"
+    except Exception:
+        pass
+
+    # support / resistance break
+    support_break, resistance_break = detect_support_resistance_break(df, lookback=20)
+
+    # three peaks
+    three_peak = detect_three_peaks(df["Close"])
+
+    # 11:00 and 15:00 green candle detection on 15m bars:
+    df_local = df.copy()
+    df_local["hour"] = df_local.index.tz_localize(None).hour
+    green_11 = any((df_local["hour"] == 11) & (df_local["Close"] > df_local["Open"]))
+    green_15 = any((df_local["hour"] == 15) & (df_local["Close"] > df_local["Open"]))
+
+    # trend
+    trend = "Yukarı" if ma_vals.get(20) and ma_vals.get(50) and ma_vals[20] > ma_vals[50] else "Aşağı"
+
+    # daily change percentage (using earliest available in df)
+    try:
+        daily_change = round((current_price - df["Close"].iloc[0]) / df["Close"].iloc[0] * 100, 2)
+    except Exception:
+        daily_change = 0.0
+
+    volume = int(df["Volume"].iloc[-1]) if "Volume" in df.columns and not pd.isna(df["Volume"].iloc[-1]) else None
+
+    # basic AL/SAT from RSI thresholds (user had many thresholds across conversation; using 30/70 here as safe)
+    last_signal = None
+    if rsi_val < 30:
+        last_signal = "AL"
+    elif rsi_val > 70:
+        last_signal = "SAT"
+
+    # Composite daily logic (A-type) - simplified:
+    # - Check daily 1D series: if yesterday had a green candle and today turned green2, and h4 or 15m condition -> set composite
+    composite_signal = None
+    try:
+        # fetch 1d bars (less frequently) - lightweight
+        df1d = yf.download(sym, period="10d", interval="1d", auto_adjust=True, progress=False)
+        if not df1d.empty and "Close" in df1d.columns:
+            # yesterday index -2, today -1
+            if len(df1d) >= 2:
+                yesterday_open = df1d["Open"].iloc[-2]
+                yesterday_close = df1d["Close"].iloc[-2]
+                today_open = df1d["Open"].iloc[-1]
+                today_close = df1d["Close"].iloc[-1]
+                # yesterday green?
+                yesterday_green = yesterday_close > yesterday_open
+                today_green = today_close > today_open
+                # Count green count across days: if yesterday green and today green -> double green
+                if yesterday_green and today_green:
+                    # now check 4H/15m indicator on the 15m df (approx using green_11/15)
+                    # if any of green_11 or green_15 true -> composite A
+                    if green_11 or green_15:
+                        composite_signal = "A"
+    except Exception:
+        pass
+
+    # signal_time in UTC (aware)
+    signal_time = datetime.now(timezone.utc).isoformat()
+
+    out = {
+        "symbol": sym.replace(".IS",""),
+        "current_price": current_price,
+        "yfinance_price": current_price,
+        "trend": trend,
+        "last_signal": last_signal,
+        "signal_time": signal_time,
+        "daily_change": f"%{daily_change}",
+        "volume": volume,
+        "RSI": float(rsi_val),
+        "support_break": support_break,
+        "resistance_break": resistance_break,
+        "green_mum_11": green_11,
+        "green_mum_15": green_15,
+        "three_peak_break": three_peak,
+        "ma_breaks": ma_breaks,
+        "ma_values": ma_vals,
+        "composite_signal": composite_signal
+    }
+    return out
 
 def fetch_bist_data():
-    symbols = get_bist_symbols()
+    syms = get_bist_symbols()
     results = []
-    for sym in symbols:
+    for s in syms:
         try:
-            df = yf.download(sym, period="7d", interval="15m", auto_adjust=True, progress=False)
-            df_t = safe_extract_single_ticker(df, sym)
-            if df_t is None or df_t.empty:
-                print("[fetch_bist] fetch error for", sym, "empty or no Close")
-                continue
-
-            # clean
-            df_t = df_t.dropna(how="all")
-            if df_t.empty or "Close" not in df_t.columns:
-                print("[fetch_bist] empty or no Close after cleanup for", sym)
-                continue
-
-            # calculations
-            df_t["RSI"] = calculate_rsi(df_t["Close"])
-            rsi_val = float(df_t["RSI"].iloc[-1])
-
-            mas = moving_averages(df_t, windows=[20,50,100,200])
-            current_price = float(df_t["Close"].iloc[-1])
-
-            ma_breaks = {}
-            for w, mv in mas.items():
-                if mv is None:
-                    ma_breaks[f"MA{w}"] = None
-                else:
-                    ma_breaks[f"MA{w}"] = "price_above" if current_price > mv else "price_below"
-
-            # golden/death cross
-            try:
-                ma20 = df_t["Close"].rolling(20,min_periods=1).mean()
-                ma50 = df_t["Close"].rolling(50,min_periods=1).mean()
-                if len(ma20) > 1 and len(ma50) > 1:
-                    if ma20.iloc[-2] <= ma50.iloc[-2] and ma20.iloc[-1] > ma50.iloc[-1]:
-                        ma_breaks["20x50"] = "golden_cross"
-                    elif ma20.iloc[-2] >= ma50.iloc[-2] and ma20.iloc[-1] < ma50.iloc[-1]:
-                        ma_breaks["20x50"] = "death_cross"
-            except Exception:
-                pass
-
-            support_break, resistance_break = detect_support_resistance_break(df_t, lookback=20)
-            three_peak = detect_three_peaks(df_t["Close"])
-
-            # hours detection on 15m bars -> mark if any green in hour=11 or hour=15
-            df_t["hour"] = df_t.index.tz_localize(None).hour
-            green_11 = any((df_t["hour"] == 11) & (df_t["Close"] > df_t["Open"]))
-            green_15 = any((df_t["hour"] == 15) & (df_t["Close"] > df_t["Open"]))
-
-            trend = "Yukarı" if mas.get(20) and mas.get(50) and mas[20] > mas[50] else "Aşağı"
-            daily_change = round((current_price - df_t["Close"].iloc[0]) / df_t["Close"].iloc[0] * 100, 2) if len(df_t)>0 else 0
-            volume = int(df_t["Volume"].iloc[-1]) if "Volume" in df_t.columns and not pd.isna(df_t["Volume"].iloc[-1]) else None
-
-            last_signal = "Yok"
-            if rsi_val < 20:
-                last_signal = "AL"
-            elif rsi_val > 80:
-                last_signal = "SAT"
-
-            results.append({
-                "symbol": sym.replace(".IS",""),
-                "current_price": current_price,
-                "yfinance_price": current_price,
-                "trend": trend,
-                "last_signal": last_signal,
-                "signal_time": to_tr_timezone(datetime.utcnow()).strftime("%Y-%m-%d %H:%M:%S"),
-                "daily_change": f"%{daily_change}",
-                "volume": volume,
-                "RSI": rsi_val,
-                "support_break": bool(support_break),
-                "resistance_break": bool(resistance_break),
-                "green_mum_11": bool(green_11),
-                "green_mum_15": bool(green_15),
-                "three_peak_break": bool(three_peak),
-                "ma_breaks": ma_breaks,
-                "ma_values": mas
-            })
+            item = fetch_one_symbol(s)
+            results.append(item)
         except Exception as e:
-            print("[fetch_bist] fetch error for", sym, e)
+            print("[fetch_bist] fetch error for", s, e)
+            # small sleep to avoid hammering
+            time.sleep(0.05)
             continue
-        time.sleep(0.15)
+        time.sleep(0.15)  # throttle
     return results
