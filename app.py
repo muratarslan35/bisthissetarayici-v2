@@ -56,7 +56,6 @@ def telegram_send(text, parse_mode="HTML"):
         try:
             r = requests.post(url, json=payload, timeout=6)
             print("[APP] Telegram ->", cid, r.status_code, r.text if r is not None else "")
-            # if unauthorized, log once (do not spam)
             if r.status_code == 401:
                 print("[APP] Telegram unauthorized. Check TELEGRAM_TOKEN.")
         except Exception as e:
@@ -64,10 +63,6 @@ def telegram_send(text, parse_mode="HTML"):
 
 # ------------- CHECK SIGNAL DUPLICATION -------------
 def should_send_signal(symbol, sig_key, dedupe_seconds=86400):
-    """
-    Return True if this (symbol, sig_key) wasn't sent in the last dedupe_seconds.
-    We store epoch seconds.
-    """
     now = int(time.time())
     with SENT_LOCK:
         sym_map = SENT_SIGNALS.setdefault(symbol, {})
@@ -82,7 +77,6 @@ def daily_reset_loop():
     while True:
         try:
             now_tr = to_tr_timezone(datetime.utcnow())
-            # next midnight TR (set 00:00:05 to ensure after midnight)
             next_midnight = (now_tr + timedelta(days=1)).replace(
                 hour=0, minute=0, second=5, microsecond=0
             )
@@ -93,7 +87,6 @@ def daily_reset_loop():
             print("[APP] Daily SENT_SIGNALS cleared at TR midnight.")
         except Exception as e:
             print("[APP] daily_reset_loop error:", e)
-            # wait bit before retry
             time.sleep(30)
 
 # ---------------- MAIN UPDATE LOOP ----------------
@@ -101,16 +94,15 @@ def update_loop():
     global LATEST_DATA
 
     print("[APP] update_loop started.")
-    # send one-time startup notification (only if token seems valid)
     try:
         telegram_send("🤖 Sistem aktif! Bot başlatıldı.")
-    except Exception as e:
-        print("[APP] startup telegram error:", e)
+    except:
+        pass
 
     while True:
         try:
             fetch_start = time.time()
-            results = fetch_bist_data()  # list of dicts per symbol
+            results = fetch_bist_data()
             fetch_end = time.time()
 
             processed = []
@@ -118,18 +110,16 @@ def update_loop():
 
             for item in results:
                 try:
-                    # process_signals MUST return list of tuples (sig_key, message)
                     signals = process_signals(item) or []
                 except Exception as e:
                     print("[APP] process_signals error for", item.get("symbol"), e)
                     signals = []
 
-                # ensure signals is iterable of (key,message)
                 for x in signals:
                     if not isinstance(x, (list, tuple)) or len(x) < 2:
                         continue
                     sig_key, message = x[0], x[1]
-                    # dedupe by symbol + sig_key
+
                     if should_send_signal(item.get("symbol"), sig_key):
                         try:
                             telegram_send(message)
@@ -152,32 +142,32 @@ def update_loop():
 
         except Exception as e:
             print("[APP] Loop ERROR:", e)
-            # ensure LATEST_DATA contains the error for dashboard visibility
             with data_lock:
                 LATEST_DATA["status"] = "error"
                 LATEST_DATA["error"] = str(e)
-        # wait interval
+
         interval = int(os.getenv("FETCH_INTERVAL", "60"))
         time.sleep(interval)
 
-# ---------------- START THREADS ----------------
-started = False
+# ---------------- FIX — LOOP ALWAYS STARTS AUTOMATICALLY ----------------
+background_started = False
+def start_background_threads():
+    global background_started
+    if background_started:
+        return
+    background_started = True
+    print("[APP] Background threads starting...")
+    threading.Thread(target=update_loop, daemon=True).start()
+    threading.Thread(target=daily_reset_loop, daemon=True).start()
+    try:
+        from self_ping import start_self_ping
+        start_self_ping()
+    except:
+        pass
+    print("[APP] Background threads started.")
 
-@app.before_request
-def start_background_once():
-    global started
-    if not started:
-        started = True
-        threading.Thread(target=update_loop, daemon=True).start()
-        threading.Thread(target=daily_reset_loop, daemon=True).start()
-        # start self-ping if configured
-        try:
-            from self_ping import start_self_ping
-            start_self_ping()
-            print("[APP] Self-ping started (if SELF_URL set).")
-        except Exception as e:
-            print("[APP] start_self_ping error:", e)
-        print("[APP] Background threads started.")
+# Start threads immediately when app loads
+start_background_threads()
 
 # ---------------- ROUTES ----------------
 @app.route("/")
@@ -187,7 +177,6 @@ def index():
 @app.route("/latest-data")
 def latest_data():
     with data_lock:
-        # always return JSON safe structure
         out = {
             "data": LATEST_DATA.get("data", []),
             "status": LATEST_DATA.get("status"),
@@ -209,11 +198,5 @@ def health():
 
 # ---------------- LOCAL DEV ----------------
 if __name__ == "__main__":
-    threading.Thread(target=update_loop, daemon=True).start()
-    threading.Thread(target=daily_reset_loop, daemon=True).start()
-    try:
-        from self_ping import start_self_ping
-        start_self_ping()
-    except Exception:
-        pass
+    start_background_threads()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
