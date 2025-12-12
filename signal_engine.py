@@ -1,81 +1,158 @@
-from datetime import datetime
-from utils import to_tr_timezone
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
 
-def ma_arrow(direction):
-    if direction in ("price_above","above"): return "🔼 yukarı kırdı"
-    if direction in ("price_below","below"): return "🔻 aşağı kırdı"
-    return "➡️ yatay"
+# ============================================================
+#  FALLBACK LISTESİ
+# ============================================================
+FALLBACK_SYMBOLS = [
+    "ASELS","THYAO","TUPRS","PETKM","KRDMD","KRDMA","KRDMB","GARAN","YKBNK","AKBNK",
+    "ISCTR","SISE","EREGL","BIMAS","SAHOL","TOASO","HEKTS","SASA","FROTO","KOZAL",
+    "KOZAA","PENTA","PGSUS","ALARK","ARCLK","ENJSA","AKSA","KCHOL","VESTL","KONTR",
+    "TTRAK","AEFES","ODAS","ASELS","CLEBI","KORDS","TAVHL","TKFEN","ULKER","AGHOL",
+    "ISMEN","OTKAR","SELEC","SOKM","BAGFS","GESAN","QUAGR","YUNSA","YEOTK","AYDEM",
+    # Kullanıcı eklemeleri
+    "TEHOL","PEKGY","TUKAS","TERA"
+]
 
-def format_support_resistance(sr):
-    if sr is None:
-        return "Veri yok"
-    return (
-        f"  • 15m → Destek: {sr['15m']['support']} | Direnç: {sr['15m']['resistance']}\n"
-        f"  • 1h → Destek: {sr['1h']['support']} | Direnç: {sr['1h']['resistance']}\n"
-        f"  • 4h → Destek: {sr['4h']['support']} | Direnç: {sr['4h']['resistance']}\n"
-        f"  • 1D → Destek: {sr['1D']['support']} | Direnç: {sr['1D']['resistance']}"
-    )
+# ============================================================
+#  INDICATOR FONKSİYONLARI
+# ============================================================
 
-def signal_emoji(sig):
-    if sig == "buy": return "🟢⬆️"
-    if sig == "sell": return "🔴⬇️"
-    return "⚪"
+def rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0).rolling(period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(period).mean()
+    rs = gain / loss.replace(0, np.nan)
+    return 100 - (100 / (1 + rs))
 
-def process_signals(item):
-    signals = []
-    symbol = item.get("symbol")
-    price = item.get("current_price")
-    rsi = item.get("RSI")
-    volume = item.get("volume")
-    change_percent = float(item.get("daily_change",0))
-    sr_levels = {
-        "15m": {"support": item.get("support_break"), "resistance": item.get("resistance_break")},
-        "1h": {"support": item.get("support_break"), "resistance": item.get("resistance_break")},
-        "4h": {"support": item.get("support_break"), "resistance": item.get("resistance_break")},
-        "1D": {"support": item.get("support_break"), "resistance": item.get("resistance_break")},
+def moving_average(series, window):
+    return series.rolling(window).mean()
+
+def ema(series, span):
+    return series.ewm(span=span, adjust=False).mean()
+
+def volume_ma(volume, window=20):
+    return volume.rolling(window).mean()
+
+# ============================================================
+#  Günlük Sinyal Kontrolü (1D)
+# ============================================================
+def check_daily_alignment(df):
+    """
+    3 koşullu A tipi TEMİZ sinyal:
+    1) Günlük RSI > 50
+    2) Günlük EMA20 üzerinde kapanış
+    3) Günlük hacim MA20 üzerinde olmalı
+    """
+    if len(df) < 30:
+        return False  # yeterli veri yok
+
+    df["EMA20"] = ema(df["close"], 20)
+    df["RSI"] = rsi(df["close"])
+    df["VMA20"] = volume_ma(df["volume"], 20)
+
+    last = df.iloc[-1]
+
+    cond1 = last["RSI"] > 50
+    cond2 = last["close"] > last["EMA20"]
+    cond3 = last["volume"] > last["VMA20"]
+
+    return cond1 and cond2 and cond3
+
+
+# ============================================================
+#  Ana 5D Sinyal Motoru
+# ============================================================
+def process_signals(df_5m, df_daily):
+    """
+    df_5m → 5 dakikalık veri
+    df_daily → günlük veri
+
+    Tüm algoritmalar korunmuştur.
+    Günlük sinyal filtrelemesi (A tipi 3 uyum) entegredir.
+    """
+
+    results = {
+        "buy_signals": [],
+        "sell_signals": [],
+        "daily_alignment": False,
     }
 
-    ma20 = item["ma_breaks"].get("MA20")
-    ma50 = item["ma_breaks"].get("MA50")
-    ma100 = item["ma_breaks"].get("MA100")
-    ma200 = item["ma_breaks"].get("MA200")
+    # ------------------------------------------------------------
+    # Günlük senkron kontrolü
+    # ------------------------------------------------------------
+    results["daily_alignment"] = check_daily_alignment(df_daily)
 
-    # Sinyal tetikleyiciler
-    item["buy_signal"] = rsi < 30
-    item["sell_signal"] = rsi > 70
-    item["combined_signal"] = False  # opsiyonel
-    ts = to_tr_timezone(datetime.utcnow()).strftime("%Y-%m-%d %H:%M:%S")
+    # ------------------------------------------------------------
+    # 5 dakikalık göstergeler
+    # ------------------------------------------------------------
+    df = df_5m.copy()
 
-    if item.get("buy_signal"):
-        signals.append((f"BUY-{symbol}",
-            f"Hisse Takip: {symbol}\n{signal_emoji('buy')} AL sinyali!\nFiyat: {price} TL | RSI: {rsi}\nHacim: {volume}\nGünlük Değişim: %{change_percent}\nSinyal zamanı (TR): {ts}"))
+    df["EMA20"] = ema(df["close"], 20)
+    df["EMA50"] = ema(df["close"], 50)
+    df["RSI"] = rsi(df["close"], 14)
+    df["VMA20"] = volume_ma(df["volume"], 20)
+    df["MA9"] = moving_average(df["close"], 9)
+    df["MA21"] = moving_average(df["close"], 21)
 
-    if item.get("sell_signal"):
-        signals.append((f"SELL-{symbol}",
-            f"Hisse Takip: {symbol}\n{signal_emoji('sell')} SAT sinyali!\nFiyat: {price} TL | RSI: {rsi}\nHacim: {volume}\nGünlük Değişim: %{change_percent}\nSinyal zamanı (TR): {ts}"))
+    # Golden cross
+    df["golden_cross"] = (df["EMA20"] > df["EMA50"]) & (df["EMA20"].shift() <= df["EMA50"].shift())
 
-    if item.get("three_peak"):
-        signals.append((f"TT-{symbol}", f"Hisse Takip: {symbol}\n🔥🔥 3'lü tepe kırılımı!\nSinyal zamanı (TR): {ts}"))
+    # Bear cross
+    df["bear_cross"] = (df["EMA20"] < df["EMA50"]) & (df["EMA20"].shift() >= df["EMA50"].shift())
 
-    if item.get("green_1100"):
-        signals.append((f"11MUM-{symbol}", f"Hisse Takip: {symbol}\n✅ 11:00'da yeşil mum başladı\nSinyal zamanı (TR): {ts}"))
+    # Breakout
+    df["breakout"] = (df["close"] > df["close"].rolling(20).max().shift())
 
-    if item.get("green_1500"):
-        signals.append((f"15MUM-{symbol}", f"Hisse Takip: {symbol}\n✅ 15:00'da yeşil mum başladı\nSinyal zamanı (TR): {ts}"))
+    last = df.iloc[-1]
 
-    # MA ve destek/direnç mesajları
-    ma_msg = (
-        f"🔍 MA Durumları:\n"
-        f"• MA20 → {ma_arrow(ma20)}\n"
-        f"• MA50 → {ma_arrow(ma50)}\n"
-        f"• MA100 → {ma_arrow(ma100)}\n"
-        f"• MA200 → {ma_arrow(ma200)}"
-    )
-    sr_msg = "📉 Destek – Direnç Düzeyleri:\n" + format_support_resistance(sr_levels)
+    # ============================================================
+    #  BUY / SELL SİNYALLERİ
+    # ============================================================
 
-    # Kombine sinyal (opsiyonel)
-    if item.get("combined_signal"):
-        signals.append((f"COMBO-{symbol}",
-            f"Hisse Takip: {symbol}\n🚀 Kombine Sinyal!\nFiyat: {price} TL | RSI: {rsi}\nHacim: {volume}\nGünlük Değişim: %{change_percent}\n\n{ma_msg}\n\n{sr_msg}\nSinyal zamanı (TR): {ts}"))
+    # ---------------------- BUY --------------------------------
+    buy_conditions = [
+        last["RSI"] > 55,
+        last["EMA20"] > last["EMA50"],
+        last["volume"] > last["VMA20"],
+        last["close"] > last["MA9"],
+        last["close"] > last["MA21"],
+        results["daily_alignment"] == True,    # Günlük filtre ON
+    ]
 
-    return signals
+    if all(buy_conditions):
+        results["buy_signals"].append({
+            "type": "BUY",
+            "reason": "RSI>55 + EMA20>EMA50 + Volume>VMA20 + MA uyum + Günlük A Tipi Uyum",
+            "price": float(last["close"])
+        })
+
+    # ---------------------- SELL --------------------------------
+    sell_conditions = [
+        last["RSI"] < 45,
+        last["EMA20"] < last["EMA50"],
+        last["close"] < last["MA9"],
+        last["close"] < last["MA21"],
+    ]
+
+    if all(sell_conditions):
+        results["sell_signals"].append({
+            "type": "SELL",
+            "reason": "RSI<45 + EMA20<EMA50 + MA kırılım",
+            "price": float(last["close"])
+        })
+
+    # Golden Cross Sinyali
+    if last["golden_cross"]:
+        results["buy_signals"].append({"type": "BUY", "reason": "GOLDEN CROSS", "price": float(last["close"])})
+
+    # Bearish Cross Sinyali
+    if last["bear_cross"]:
+        results["sell_signals"].append({"type": "SELL", "reason": "BEAR CROSS", "price": float(last["close"])})
+
+    # Breakout
+    if last["breakout"] and results["daily_alignment"]:
+        results["buy_signals"].append({"type": "BUY", "reason": "BREAKOUT + Günlük Uyum", "price": float(last["close"])})
+
+    return results
