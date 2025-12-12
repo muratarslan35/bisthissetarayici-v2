@@ -2,6 +2,7 @@ import os
 import time
 import requests
 import pandas as pd
+import numpy as np
 import yfinance as yf
 from datetime import datetime
 from utils import calculate_rsi, moving_averages, detect_three_peaks, detect_support_resistance_break, FALLBACK_SYMBOLS
@@ -39,10 +40,15 @@ def fetch_single(symbol):
             return None
 
         df = df.dropna(how="all")
+
+        # RSI hesapla
         df["RSI"] = calculate_rsi(df["Close"])
-        rsi_val = float(df["RSI"].iloc[-1])
+        rsi_val = float(df["RSI"].iat[-1])
+
+        # MA hesapla
         mas = moving_averages(df, windows=[20,50,100,200])
-        current_price = float(df["Close"].iloc[-1])
+        current_price = float(df["Close"].iat[-1])
+
         ma_breaks = {}
         for w, mv in mas.items():
             if mv is None:
@@ -50,12 +56,13 @@ def fetch_single(symbol):
             else:
                 ma_breaks[f"MA{w}"] = "price_above" if current_price > mv else "price_below"
 
-        ma20 = df["Close"].rolling(20,min_periods=1).mean()
-        ma50 = df["Close"].rolling(50,min_periods=1).mean()
+        # golden/death cross
+        ma20 = df["Close"].rolling(20, min_periods=1).mean()
+        ma50 = df["Close"].rolling(50, min_periods=1).mean()
         if len(ma20) > 1 and len(ma50) > 1:
-            if ma20.iloc[-2] <= ma50.iloc[-2] and ma20.iloc[-1] > ma50.iloc[-1]:
+            if ma20.iat[-2] <= ma50.iat[-2] and ma20.iat[-1] > ma50.iat[-1]:
                 ma_breaks["20x50"] = "golden_cross"
-            elif ma20.iloc[-2] >= ma50.iloc[-2] and ma20.iloc[-1] < ma50.iloc[-1]:
+            elif ma20.iat[-2] >= ma50.iat[-2] and ma20.iat[-1] < ma50.iat[-1]:
                 ma_breaks["20x50"] = "death_cross"
 
         support_break, resistance_break = detect_support_resistance_break(df, lookback=20)
@@ -64,10 +71,10 @@ def fetch_single(symbol):
         df_idx["hour"] = df_idx.index.tz_localize(None).hour
         green_11 = any((df_idx["hour"] == 11) & (df_idx["Close"] > df_idx["Open"]))
         green_15 = any((df_idx["hour"] == 15) & (df_idx["Close"] > df_idx["Open"]))
-        daily_change = round((current_price - df["Close"].iloc[0]) / df["Close"].iloc[0] * 100, 2) if len(df) > 0 else 0
-        volume = int(df["Volume"].iloc[-1]) if "Volume" in df.columns and not pd.isna(df["Volume"].iloc[-1]) else None
+        daily_change = round((current_price - df["Close"].iat[0]) / df["Close"].iat[0] * 100, 2) if len(df) > 0 else 0
+        volume = int(df["Volume"].iat[-1]) if "Volume" in df.columns and not pd.isna(df["Volume"].iat[-1]) else None
 
-        # Uyumlu key’ler
+        # Return uyumlu veri
         return {
             "symbol": symbol.replace(".IS",""),
             "current_price": current_price,
@@ -93,5 +100,5 @@ def fetch_bist_data():
         rec = fetch_single(sym)
         if rec:
             results.append(rec)
-        time.sleep(0.15)
+        time.sleep(0.15)  # rate-limit
     return results
