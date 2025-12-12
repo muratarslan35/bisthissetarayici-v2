@@ -62,7 +62,7 @@ def telegram_send(text, parse_mode="HTML"):
             print("[APP] Telegram Error:", e)
 
 # ------------- CHECK SIGNAL DUPLICATION -------------
-def should_send_signal(symbol, sig_key, dedupe_seconds=86400):
+def should_send_signal(symbol, sig_key, dedupe_seconds=0):
     now = int(time.time())
     with SENT_LOCK:
         sym_map = SENT_SIGNALS.setdefault(symbol, {})
