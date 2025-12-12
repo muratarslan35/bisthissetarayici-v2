@@ -1,24 +1,14 @@
-import math
 from datetime import datetime
 from utils import to_tr_timezone
 
-# ----------------------------------------------------
-#  YARDIMCI FONKSİYONLAR (SİNYAL EMOJİ DÖNÜŞÜMLERİ)
-# ----------------------------------------------------
-
 def ma_arrow(direction):
-    """MA yönünü emojiye dönüştürür."""
-    if direction == "above":      # price above MA
-        return "🔼 yukarı kırdı"
-    if direction == "below":      # price below MA
-        return "🔻 aşağı kırdı"
+    if direction in ("price_above","above"): return "🔼 yukarı kırdı"
+    if direction in ("price_below","below"): return "🔻 aşağı kırdı"
     return "➡️ yatay"
 
 def format_support_resistance(sr):
-    """Destek/direnç sözlüğünü yazıya döker."""
     if sr is None:
         return "Veri yok"
-
     return (
         f"  • 15m → Destek: {sr['15m']['support']} | Direnç: {sr['15m']['resistance']}\n"
         f"  • 1h → Destek: {sr['1h']['support']} | Direnç: {sr['1h']['resistance']}\n"
@@ -31,108 +21,61 @@ def signal_emoji(sig):
     if sig == "sell": return "🔴⬇️"
     return "⚪"
 
-# ----------------------------------------------------
-#                ANA SİNYAL MOTORU
-# ----------------------------------------------------
 def process_signals(item):
     signals = []
     symbol = item.get("symbol")
-    price = item.get("price")
-    rsi = item.get("rsi")
+    price = item.get("current_price")
+    rsi = item.get("RSI")
     volume = item.get("volume")
-    change_percent = item.get("change_percent")
-    sr_levels = item.get("support_resistance")  # 15m/1h/4h/1D bu objede olmalı
+    change_percent = float(item.get("daily_change",0))
+    sr_levels = {
+        "15m": {"support": item.get("support_break"), "resistance": item.get("resistance_break")},
+        "1h": {"support": item.get("support_break"), "resistance": item.get("resistance_break")},
+        "4h": {"support": item.get("support_break"), "resistance": item.get("resistance_break")},
+        "1D": {"support": item.get("support_break"), "resistance": item.get("resistance_break")},
+    }
 
-    tr_time = to_tr_timezone(datetime.utcnow())
-    ts = tr_time.strftime("%Y-%m-%d %H:%M:%S")
+    ma20 = item["ma_breaks"].get("MA20")
+    ma50 = item["ma_breaks"].get("MA50")
+    ma100 = item["ma_breaks"].get("MA100")
+    ma200 = item["ma_breaks"].get("MA200")
 
-    # ----------------------------------------------------
-    # ÖRNEK: AL / SAT / FORMASYON / MUM
-    # ----------------------------------------------------
+    # Sinyal tetikleyiciler
+    item["buy_signal"] = rsi < 30
+    item["sell_signal"] = rsi > 70
+    item["combined_signal"] = False  # opsiyonel
+    ts = to_tr_timezone(datetime.utcnow()).strftime("%Y-%m-%d %H:%M:%S")
 
-    # BUY EXAMPLE
     if item.get("buy_signal"):
-        sig_key = f"BUY-{symbol}"
-        message = (
-            f"Hisse Takip: {symbol}\n"
-            f"{signal_emoji('buy')} AL sinyali!\n"
-            f"Fiyat: {price} TL | RSI: {rsi}\n"
-            f"Hacim: {volume}\n"
-            f"Günlük Değişim: %{change_percent}\n"
-        )
-        signals.append((sig_key, message))
+        signals.append((f"BUY-{symbol}",
+            f"Hisse Takip: {symbol}\n{signal_emoji('buy')} AL sinyali!\nFiyat: {price} TL | RSI: {rsi}\nHacim: {volume}\nGünlük Değişim: %{change_percent}\nSinyal zamanı (TR): {ts}"))
 
-    # SELL EXAMPLE
     if item.get("sell_signal"):
-        sig_key = f"SELL-{symbol}"
-        message = (
-            f"Hisse Takip: {symbol}\n"
-            f"{signal_emoji('sell')} SAT sinyali!\n"
-            f"Fiyat: {price} TL | RSI: {rsi}\n"
-            f"Hacim: {volume}\n"
-            f"Günlük Değişim: %{change_percent}\n"
-        )
-        signals.append((sig_key, message))
+        signals.append((f"SELL-{symbol}",
+            f"Hisse Takip: {symbol}\n{signal_emoji('sell')} SAT sinyali!\nFiyat: {price} TL | RSI: {rsi}\nHacim: {volume}\nGünlük Değişim: %{change_percent}\nSinyal zamanı (TR): {ts}"))
 
-    # 3’lü tepe
-    if item.get("triple_top"):
-        signals.append((
-            f"TT-{symbol}",
-            f"Hisse Takip: {symbol}\n🔥🔥 3'lü tepe kırılımı!"
-        ))
+    if item.get("three_peak"):
+        signals.append((f"TT-{symbol}", f"Hisse Takip: {symbol}\n🔥🔥 3'lü tepe kırılımı!\nSinyal zamanı (TR): {ts}"))
 
-    # 11:00 Y E Ş İ L M U M
     if item.get("green_1100"):
-        signals.append((
-            f"11MUM-{symbol}",
-            f"Hisse Takip: {symbol}\n✅ 11:00'da yeşil mum başladı"
-        ))
+        signals.append((f"11MUM-{symbol}", f"Hisse Takip: {symbol}\n✅ 11:00'da yeşil mum başladı\nSinyal zamanı (TR): {ts}"))
 
-    # 15:00 YESIL MUM
     if item.get("green_1500"):
-        signals.append((
-            f"15MUM-{symbol}",
-            f"Hisse Takip: {symbol}\n✅ 15:00'da yeşil mum başladı"
-        ))
+        signals.append((f"15MUM-{symbol}", f"Hisse Takip: {symbol}\n✅ 15:00'da yeşil mum başladı\nSinyal zamanı (TR): {ts}"))
 
-    # ----------------------------------------------------
-    # MA YÖNLERİNİ MESAJ FORMATINA ÇEVİR
-    # ----------------------------------------------------
+    # MA ve destek/direnç mesajları
     ma_msg = (
         f"🔍 MA Durumları:\n"
-        f"• MA20 → {ma_arrow(item.get('ma20'))}\n"
-        f"• MA50 → {ma_arrow(item.get('ma50'))}\n"
-        f"• MA100 → {ma_arrow(item.get('ma100'))}\n"
-        f"• MA200 → {ma_arrow(item.get('ma200'))}"
+        f"• MA20 → {ma_arrow(ma20)}\n"
+        f"• MA50 → {ma_arrow(ma50)}\n"
+        f"• MA100 → {ma_arrow(ma100)}\n"
+        f"• MA200 → {ma_arrow(ma200)}"
     )
-
-    # ----------------------------------------------------
-    # DESTEK – DİRENÇ BİLGİLERİ
-    # ----------------------------------------------------
     sr_msg = "📉 Destek – Direnç Düzeyleri:\n" + format_support_resistance(sr_levels)
 
-    # ----------------------------------------------------
-    # KOMBİNE SİNYAL
-    # ----------------------------------------------------
+    # Kombine sinyal (opsiyonel)
     if item.get("combined_signal"):
-        final_msg = (
-            f"Hisse Takip: {symbol}\n"
-            f"🚀🚀🚀 Kombine Sinyal!\n"
-            f"Fiyat: {price} TL | RSI: {rsi}\n"
-            f"Hacim: {volume}\n"
-            f"Günlük Değişim: %{change_percent}\n\n"
-            f"{ma_msg}\n\n"
-            f"{sr_msg}\n\n"
-            f"Sinyal zamanı (TR): {ts}"
-        )
-        signals.append((f"COMBO-{symbol}", final_msg))
+        signals.append((f"COMBO-{symbol}",
+            f"Hisse Takip: {symbol}\n🚀 Kombine Sinyal!\nFiyat: {price} TL | RSI: {rsi}\nHacim: {volume}\nGünlük Değişim: %{change_percent}\n\n{ma_msg}\n\n{sr_msg}\nSinyal zamanı (TR): {ts}"))
 
-    # ----------------------------------------------------
-    # TÜM MESAJLAR SON HALİ
-    # ----------------------------------------------------
-    final_signals = []
-    for key, msg in signals:
-        clean = msg + f"\n\nSinyal zamanı (TR): {ts}"
-        final_signals.append((key, clean))
-
-    return final_signals
+    return signals
