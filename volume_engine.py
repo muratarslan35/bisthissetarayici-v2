@@ -11,7 +11,7 @@ MIN_TICKS = 30
 WINDOW_SECONDS = 60
 MAX_TICKS = 600
 SAVE_INTERVAL = 15
-CACHE_FILE = "data/volume_cache.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))\nCACHE_FILE = os.path.join(BASE_DIR, "data", "volume_cache.json")
 
 # ======================================================
 # GLOBAL
@@ -60,7 +60,7 @@ def save_volume_cache():
     while RUNNING:
         try:
 
-            os.makedirs("data", exist_ok=True)
+            os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
 
             with LOCK:
                 data = {
