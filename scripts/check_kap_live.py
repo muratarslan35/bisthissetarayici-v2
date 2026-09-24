@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 import json
 import sys
+from pathlib import Path
+
+# Running "python scripts/check_kap_live.py" sets sys.path[0] to scripts/.
+# Add the repository root explicitly so the smoke test exercises production modules.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from kap_service import get_kap_health, init_kap_store, poll_kap
 from utils import FALLBACK_SYMBOLS
