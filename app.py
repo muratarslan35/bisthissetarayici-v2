@@ -983,7 +983,7 @@ def scanner_loop():
     last_market_data = []
     kap_cache = load_recent_kap_cache(minutes=1080)
     last_kap_check = 0
-    KAP_INTERVAL = max(30, int(os.getenv("KAP_POLL_SECONDS", "45")))
+    KAP_INTERVAL = max(30, int(os.getenv("KAP_POLL_SECONDS", "60")))
 
     last_brut_report = None
     last_daily_report = None
