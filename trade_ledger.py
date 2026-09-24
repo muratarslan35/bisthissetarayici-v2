@@ -96,8 +96,6 @@ def _expiry(scope):
 
 
 def record_signal(signal):
-    init_trade_ledger()
-
     fingerprint = _fingerprint(signal)
     now = _now()
     scope = signal.get("signal_scope")
@@ -161,6 +159,15 @@ def record_signal(signal):
     return inserted
 
 
+def get_open_trade_symbols():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT symbol FROM paper_trades WHERE status = 'OPEN'")
+    symbols = {row["symbol"] for row in cur.fetchall()}
+    conn.close()
+    return symbols
+
+
 def _pct(price, entry):
     if not entry:
         return 0.0
@@ -177,7 +184,6 @@ def update_open_trades(symbol, price):
     except Exception:
         return []
 
-    init_trade_ledger()
     now = _now()
     conn = get_connection()
     cur = conn.cursor()
