@@ -110,3 +110,45 @@ MIN_AVG_DAILY_TURNOVER_TL=20000000
 ## Safety rule
 
 No strategy promises a future price move. Signals are ranked statistical/technical candidates. All new strategy changes should first be evaluated through the persistent paper-trade ledger before being treated as production-grade execution logic.
+
+
+## Dashboard V3
+
+The dashboard is durable and process-safe. It does not rely on Python globals shared
+between the Flask web process and scanner worker.
+
+Data flow:
+
+```text
+scanner worker
+   │
+   ├─ market snapshot/context ──> dashboard_runtime + market_prices
+   ├─ signals ──────────────────> strategy_signals
+   └─ paper lifecycle ──────────> paper_trades
+                                      │
+                                      ▼
+                              Flask /api/dashboard
+                                      │
+                                      ▼
+                               dashboard.html
+```
+
+The dashboard exposes:
+- worker heartbeat and market-open state
+- market regime and breadth
+- configured universe size and data source
+- open POSITION and INTRADAY paper trades
+- current observed price and live return
+- stop / TP1 / TP2 / TP3 / trailing state
+- relative-strength percentile
+- data confidence / data age
+- MFE / MAE
+- 30-day per-algorithm closed-trade statistics
+- recent closed paper trades
+
+`/api/dashboard` requires an authenticated application session.
+
+SQLite is configured with WAL and a busy timeout so the read-heavy web process can
+coexist with scanner writes. The worker persists only refreshed market snapshots and
+processes the full universe only when a new snapshot or fresh KAP event exists.
+
