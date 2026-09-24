@@ -426,6 +426,9 @@ def _base_signal(item, scope, algo, score, reasons, ctx, rs_pct, risk):
         "market_regime": ctx.get("regime"),
         "market_breadth": ctx.get("breadth_intraday"),
         "relative_strength_percentile": round((rs_pct or 0.0) * 100, 1),
+        "data_confidence": item.get("data_confidence"),
+        "data_age_minutes": item.get("data_age_minutes"),
+        "data_source": item.get("data_source"),
         "time": _now().strftime("%H:%M:%S"),
         **risk,
     }
@@ -434,6 +437,8 @@ def _base_signal(item, scope, algo, score, reasons, ctx, rs_pct, risk):
 def evaluate_position_signals(item, ctx, kap_cache=None):
     symbol = item.get("symbol")
     price = _num(item.get("current_price"))
+    if _num(item.get("data_confidence"), 100.0) < 70:
+        return []
     d1 = _closed(_frame(item, "1d"), intraday=False)
     d4 = _closed(_frame(item, "4h"), intraday=True)
     d1h = _closed(_frame(item, "1h"), intraday=True)
@@ -570,6 +575,8 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
 def evaluate_intraday_signals(item, ctx, kap_cache=None):
     symbol = item.get("symbol")
     price = _num(item.get("current_price"))
+    if _num(item.get("data_confidence"), 100.0) < 80:
+        return []
     d15 = _frame(item, "15m")
     d1 = _closed(_frame(item, "1d"), intraday=False)
 
