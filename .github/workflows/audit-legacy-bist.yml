@@ -1,0 +1,64 @@
+name: Audit Legacy BIST Autostart
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/audit-legacy-bist.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keyscan -H 130.162.48.162 >> ~/.ssh/known_hosts
+
+      - name: Read-only legacy BIST autostart audit
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/key -o BatchMode=yes ubuntu@130.162.48.162 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          echo '=== BIST PROCESSES ==='
+          ps -eo pid,user,cmd | grep -Ei '/home/ubuntu/bistbot|bistbot|worker.py|app.py' | grep -v grep || true
+
+          echo
+          echo '=== SYSTEMD MATCHES ==='
+          systemctl list-unit-files --no-pager | grep -Ei 'bist|bot' || true
+          systemctl list-units --all --no-pager | grep -Ei 'bist|bot' || true
+
+          echo
+          echo '=== USER CRONTAB ==='
+          crontab -l 2>/dev/null | grep -Ei 'bist|bistbot|app.py|worker.py' || true
+
+          echo
+          echo '=== ROOT CRONTAB ==='
+          sudo crontab -l 2>/dev/null | grep -Ei 'bist|bistbot|app.py|worker.py' || true
+
+          echo
+          echo '=== CRON FILES ==='
+          sudo grep -RniE 'bistbot|/home/ubuntu/bistbot|worker.py|app.py' /etc/cron.d /etc/cron.daily /etc/cron.hourly /etc/crontab 2>/dev/null || true
+
+          echo
+          echo '=== RC LOCAL ==='
+          sudo grep -niE 'bistbot|/home/ubuntu/bistbot|worker.py|app.py' /etc/rc.local 2>/dev/null || true
+
+          echo
+          echo '=== TMUX/SCREEN ==='
+          tmux ls 2>/dev/null || true
+          screen -ls 2>/dev/null || true
+
+          echo 'LEGACY_BIST_AUTOSTART_AUDIT=PASS'
+          REMOTE
