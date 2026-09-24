@@ -1,15 +1,13 @@
-import calendar
 import hashlib
 import json
 import os
 import re
 import time
 import unicodedata
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
-import feedparser
 import requests
 from bs4 import BeautifulSoup
 
@@ -17,34 +15,50 @@ from database import get_connection
 
 TR_TZ = ZoneInfo("Europe/Istanbul")
 
-KAP_RSS_URL = os.getenv("KAP_RSS_URL", "https://www.kap.org.tr/tr/rss/all")
-KAP_HTML_URL = os.getenv(
-    "KAP_HTML_URL",
-    "https://www.kap.org.tr/tr/bildirim-sorgu-sonuc?cat=6&cmp=Y&slf=ALL&srcbar=Y",
+# Public JSON backend used by the KAP web application.
+KAP_LIST_API = os.getenv(
+    "KAP_LIST_API",
+    "https://www.kap.org.tr/tr/api/disclosure/members/byCriteria",
 )
+KAP_DETAIL_API = os.getenv(
+    "KAP_DETAIL_API",
+    "https://www.kap.org.tr/tr/api/notification/attachment-detail/{disclosure_index}",
+)
+KAP_DISCLOSURE_URL = "https://www.kap.org.tr/tr/Bildirim/{disclosure_index}"
 
-# KAP's documented REST dissemination service is a subscriber integration.
-# It is therefore opt-in only in this free-data project.
-KAP_API_ENABLED = os.getenv("KAP_API_ENABLED", "0") == "1"
-KAP_API_URL = os.getenv("KAP_API_URL", "https://www.kap.org.tr/tr/api/disclosures")
-
-RSS_MIN_INTERVAL = max(30, int(os.getenv("KAP_RSS_MIN_INTERVAL_SECONDS", "60")))
-HTML_RECONCILE_INTERVAL = max(
-    600, int(os.getenv("KAP_HTML_RECONCILE_SECONDS", "1800"))
-)
-HTML_FAILOVER_INTERVAL = max(
-    180, int(os.getenv("KAP_HTML_FAILOVER_SECONDS", "300"))
-)
 HTTP_TIMEOUT = max(4, int(os.getenv("KAP_HTTP_TIMEOUT_SECONDS", "10")))
+IGS_INTERVAL = max(30, int(os.getenv("KAP_IGS_POLL_SECONDS", "60")))
+DDK_INTERVAL = max(120, int(os.getenv("KAP_DDK_POLL_SECONDS", "300")))
+OFF_HOURS_INTERVAL = max(120, int(os.getenv("KAP_OFF_HOURS_POLL_SECONDS", "300")))
+MAX_BACKOFF = max(300, int(os.getenv("KAP_MAX_BACKOFF_SECONDS", "900")))
+DETAIL_VERIFY_BUDGET = max(1, int(os.getenv("KAP_DETAIL_VERIFY_BUDGET", "10")))
 
 SESSION = requests.Session()
 SESSION.headers.update({
-    "User-Agent": "Mozilla/5.0 (compatible; BIST-Trade-Engine/3.0; +https://kap.org.tr)",
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
     "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.7",
+    "Referer": "https://www.kap.org.tr/tr/bildirim-sorgu",
+    "Origin": "https://www.kap.org.tr",
     "Cache-Control": "no-cache",
 })
 
-_LAST_ATTEMPT = {"KAP_RSS": 0.0, "KAP_HTML": 0.0, "KAP_API": 0.0}
+_LAST_ATTEMPT = {
+    "KAP_API_IGS": 0.0,
+    "KAP_API_DDK": 0.0,
+}
+_NEXT_ALLOWED = {
+    "KAP_API_IGS": 0.0,
+    "KAP_API_DDK": 0.0,
+}
+_FAILURES = {
+    "KAP_API_IGS": 0,
+    "KAP_API_DDK": 0,
+}
+_BOOTSTRAPPED = set()
 
 KEYWORD_WEIGHTS = {
     "bedelsiz": 30,
@@ -92,8 +106,7 @@ def _now():
 
 
 def _normalize_text(text):
-    value = str(text or "").lower()
-    value = value.replace("ı", "i")
+    value = str(text or "").lower().replace("ı", "i")
     value = unicodedata.normalize("NFKD", value)
     value = "".join(ch for ch in value if not unicodedata.combining(ch))
     return re.sub(r"\s+", " ", value).strip()
@@ -101,11 +114,7 @@ def _normalize_text(text):
 
 def kap_score(text):
     normalized = _normalize_text(text)
-    score = 0
-    for term, weight in KEYWORD_WEIGHTS.items():
-        if term in normalized:
-            score += weight
-    return score
+    return sum(weight for term, weight in KEYWORD_WEIGHTS.items() if term in normalized)
 
 
 def is_trade_relevant(text):
@@ -115,17 +124,10 @@ def is_trade_relevant(text):
 
 def _official_kap_url(url):
     try:
-        host = (urlparse(url).hostname or "").lower()
+        host = (urlparse(str(url)).hostname or "").lower()
         return host == "kap.org.tr" or host.endswith(".kap.org.tr")
     except Exception:
         return False
-
-
-def _kap_id_from_link(link):
-    if not link:
-        return None
-    match = re.search(r"/(?:tr/|en/)?Bildirim/(\d+)", str(link), re.I)
-    return match.group(1) if match else None
 
 
 def _clean_symbol(value):
@@ -144,35 +146,42 @@ def _allowed_symbol_map(fallback_symbols):
     }
 
 
-def _extract_symbols(text, allowed):
-    if not text:
+def _extract_symbols_from_codes(codes, allowed):
+    if not codes:
         return []
 
-    tokens = set(re.findall(r"(?<![A-Z0-9])[A-Z0-9]{2,8}(?![A-Z0-9])", str(text).upper()))
-    found = [allowed[token] for token in tokens if token in allowed]
-    return sorted(set(found))
+    tokens = set(
+        re.findall(
+            r"(?<![A-Z0-9])[A-Z0-9]{2,8}(?![A-Z0-9])",
+            str(codes).upper(),
+        )
+    )
+    return sorted({allowed[token] for token in tokens if token in allowed})
 
 
-def _entry_time(entry):
-    for key in ("published_parsed", "updated_parsed", "created_parsed"):
-        parsed = entry.get(key)
-        if parsed:
-            try:
-                return datetime.fromtimestamp(
-                    calendar.timegm(parsed), tz=timezone.utc
-                ).astimezone(TR_TZ)
-            except Exception:
-                pass
-    return _now()
-
-
-def _plain_html(value):
+def _parse_publish_time(value):
     if not value:
-        return ""
+        return None
+
+    raw = str(value).strip()
+    for fmt in (
+        "%d.%m.%Y %H:%M:%S",
+        "%d.%m.%Y %H:%M",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+    ):
+        try:
+            return datetime.strptime(raw, fmt).replace(tzinfo=TR_TZ)
+        except Exception:
+            pass
+
     try:
-        return BeautifulSoup(str(value), "html.parser").get_text(" ", strip=True)
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=TR_TZ)
+        return parsed.astimezone(TR_TZ)
     except Exception:
-        return str(value)
+        return None
 
 
 def init_kap_store():
@@ -184,7 +193,11 @@ def init_kap_store():
         event_key TEXT PRIMARY KEY,
         kap_id TEXT NOT NULL,
         symbol TEXT NOT NULL,
-        title TEXT NOT NULL,
+        company_title TEXT,
+        disclosure_class TEXT,
+        disclosure_type TEXT,
+        disclosure_category TEXT,
+        subject TEXT,
         summary TEXT,
         link TEXT NOT NULL,
         event_time TEXT NOT NULL,
@@ -192,10 +205,8 @@ def init_kap_store():
         score REAL NOT NULL DEFAULT 0,
         trade_relevant INTEGER NOT NULL DEFAULT 0,
         verified INTEGER NOT NULL DEFAULT 0,
-        rss_seen INTEGER NOT NULL DEFAULT 0,
-        html_seen INTEGER NOT NULL DEFAULT 0,
-        api_seen INTEGER NOT NULL DEFAULT 0,
-        source_first TEXT,
+        detail_verified INTEGER NOT NULL DEFAULT 0,
+        discovery_source TEXT,
         source_last TEXT,
         raw_hash TEXT
     )
@@ -231,18 +242,31 @@ def init_kap_store():
     conn.close()
 
 
-def _source_health(source, ok, status, latency_ms, entry_count, verified_count, error=None, http_status=None):
+def _source_health(
+    source,
+    ok,
+    status,
+    latency_ms,
+    entry_count,
+    verified_count,
+    error=None,
+    http_status=None,
+):
     now = _now().isoformat()
-
     conn = get_connection()
     cur = conn.cursor()
+
     cur.execute(
         "SELECT consecutive_failures, last_success FROM kap_source_health WHERE source = ?",
         (source,),
     )
     previous = cur.fetchone()
 
-    failures = 0 if ok else int(previous["consecutive_failures"] or 0) + 1 if previous else 1
+    failures = (
+        0
+        if ok
+        else (int(previous["consecutive_failures"] or 0) + 1 if previous else 1)
+    )
     last_success = now if ok else (previous["last_success"] if previous else None)
 
     cur.execute("""
@@ -280,119 +304,137 @@ def _source_health(source, ok, status, latency_ms, entry_count, verified_count, 
     conn.close()
 
 
-def _source_is_healthy(source):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT status FROM kap_source_health WHERE source = ?",
-        (source,),
-    )
-    row = cur.fetchone()
-    conn.close()
-    return bool(row and row["status"] in ("healthy", "reachable_no_rows"))
+def _set_backoff(source, ok):
+    now_ts = time.time()
+    if ok:
+        _FAILURES[source] = 0
+        _NEXT_ALLOWED[source] = 0.0
+        return
+
+    _FAILURES[source] = int(_FAILURES.get(source, 0)) + 1
+    delay = min(MAX_BACKOFF, 30 * (2 ** min(_FAILURES[source] - 1, 5)))
+    _NEXT_ALLOWED[source] = now_ts + delay
 
 
-def _upsert_event(event, source):
-    event_key = f"{event['kap_id']}:{event['symbol']}"
-    now = _now().isoformat()
-    source_flags = {
-        "rss_seen": 1 if source == "KAP_RSS" else 0,
-        "html_seen": 1 if source == "KAP_HTML" else 0,
-        "api_seen": 1 if source == "KAP_API" else 0,
+def _base_interval(member_type):
+    if member_type == "DDK":
+        return DDK_INTERVAL
+
+    hour = _now().hour
+    if 8 <= hour <= 23:
+        return IGS_INTERVAL
+    return OFF_HOURS_INTERVAL
+
+
+def _criteria(member_type, day):
+    date_str = day.strftime("%Y-%m-%d")
+    return {
+        "fromDate": date_str,
+        "toDate": date_str,
+        "memberType": member_type,
+        "mkkMemberOidList": [],
+        "inactiveMkkMemberOidList": [],
+        "disclosureClass": "",
+        "subjectList": [],
+        "isLate": "",
+        "mainSector": "",
+        "sector": "",
+        "subSector": "",
+        "marketOid": "",
+        "index": "",
+        "bdkReview": "",
+        "bdkMemberOidList": [],
+        "year": "",
+        "term": "",
+        "ruleType": "",
+        "period": "",
+        "fromSrc": False,
+        "srcCategory": "",
+        "disclosureIndexList": [],
     }
 
-    raw_hash = hashlib.sha256(
-        json.dumps(
-            {
-                "kap_id": event["kap_id"],
-                "symbol": event["symbol"],
-                "title": event["title"],
-                "summary": event.get("summary"),
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        ).encode("utf-8")
-    ).hexdigest()
 
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT event_key FROM kap_events WHERE event_key = ?", (event_key,))
-    existed = cur.fetchone() is not None
+def _response_items(payload):
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("data", "content", "items", "results"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return value
+    raise RuntimeError("unexpected KAP list API schema")
 
-    cur.execute("""
-    INSERT INTO kap_events (
-        event_key, kap_id, symbol, title, summary, link, event_time,
-        received_at, score, trade_relevant, verified,
-        rss_seen, html_seen, api_seen, source_first, source_last, raw_hash
+
+def _event_from_item(item, allowed, source):
+    kap_id = item.get("disclosureIndex")
+    if kap_id is None:
+        return []
+
+    event_time = _parse_publish_time(item.get("publishDate"))
+    if event_time is None:
+        return []
+
+    codes = " ".join(
+        str(item.get(key) or "")
+        for key in ("stockCodes", "relatedStocks", "fundCode")
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(event_key) DO UPDATE SET
-        title = excluded.title,
-        summary = CASE
-            WHEN excluded.summary IS NOT NULL AND excluded.summary != ''
-            THEN excluded.summary ELSE kap_events.summary END,
-        link = excluded.link,
-        event_time = CASE
-            WHEN excluded.event_time < kap_events.event_time
-            THEN excluded.event_time ELSE kap_events.event_time END,
-        score = excluded.score,
-        trade_relevant = MAX(kap_events.trade_relevant, excluded.trade_relevant),
-        verified = 1,
-        rss_seen = MAX(kap_events.rss_seen, excluded.rss_seen),
-        html_seen = MAX(kap_events.html_seen, excluded.html_seen),
-        api_seen = MAX(kap_events.api_seen, excluded.api_seen),
-        source_last = excluded.source_last,
-        raw_hash = excluded.raw_hash
-    """, (
-        event_key,
-        event["kap_id"],
-        event["symbol"],
-        event["title"],
-        event.get("summary"),
-        event["link"],
-        event["event_time"].isoformat(),
-        now,
-        float(event.get("score") or 0),
-        1 if event.get("trade_relevant") else 0,
-        source_flags["rss_seen"],
-        source_flags["html_seen"],
-        source_flags["api_seen"],
-        source,
-        source,
-        raw_hash,
-    ))
+    symbols = _extract_symbols_from_codes(codes, allowed)
 
-    conn.commit()
-    conn.close()
-    return not existed
+    # Some company disclosures have a missing stockCodes field. As a final
+    # deterministic fallback, intersect code-like tokens from visible text
+    # against our configured universe.
+    if not symbols:
+        text_probe = " ".join(
+            str(item.get(key) or "")
+            for key in ("kapTitle", "subject", "summary", "relatedStocks")
+        )
+        symbols = _extract_symbols_from_codes(text_probe, allowed)
 
+    if not symbols:
+        return []
 
-def _build_events(kap_id, title, summary, link, event_time, allowed):
-    combined = f"{title} {summary or ''}"
-    symbols = _extract_symbols(combined, allowed)
+    subject = str(item.get("subject") or "").strip()
+    summary = str(item.get("summary") or "").strip()
+    company_title = str(item.get("kapTitle") or "").strip()
+    combined = " ".join([company_title, subject, summary, codes]).strip()
+    link = KAP_DISCLOSURE_URL.format(disclosure_index=kap_id)
 
     events = []
     for symbol in symbols:
         events.append({
             "kap_id": str(kap_id),
             "symbol": symbol,
-            "title": str(title or "").strip() or "KAP Bildirimi",
-            "summary": str(summary or "").strip(),
+            "company_title": company_title,
+            "disclosure_class": str(item.get("disclosureClass") or ""),
+            "disclosure_type": str(item.get("disclosureType") or ""),
+            "disclosure_category": str(item.get("disclosureCategory") or ""),
+            "subject": subject or "KAP Bildirimi",
+            "summary": summary,
             "link": link,
             "event_time": event_time,
             "score": kap_score(combined),
             "trade_relevant": is_trade_relevant(combined),
+            "discovery_source": source,
+            "raw_item": item,
         })
+
     return events
 
 
-def fetch_rss_events(fallback_symbols):
-    source = "KAP_RSS"
+def fetch_public_api_events(fallback_symbols, member_type="IGS", day=None):
+    source = f"KAP_API_{member_type}"
     started = time.monotonic()
     allowed = _allowed_symbol_map(fallback_symbols)
+    target_day = day or _now().date()
 
     try:
-        response = SESSION.get(KAP_RSS_URL, timeout=HTTP_TIMEOUT, allow_redirects=True)
+        response = SESSION.post(
+            KAP_LIST_API,
+            json=_criteria(member_type, target_day),
+            timeout=HTTP_TIMEOUT,
+            allow_redirects=True,
+            headers={"Content-Type": "application/json"},
+        )
         latency = (time.monotonic() - started) * 1000
 
         if response.status_code != 200:
@@ -400,50 +442,26 @@ def fetch_rss_events(fallback_symbols):
         if not _official_kap_url(response.url):
             raise RuntimeError(f"unexpected redirect host: {response.url}")
 
-        content = response.content
-        probe = content[:1000].lower()
-        if b"<rss" not in probe and b"<feed" not in probe and b"<?xml" not in probe:
-            raise RuntimeError("response is not an RSS/Atom document")
-
-        feed = feedparser.parse(content)
-        entries = list(feed.entries or [])
+        items = _response_items(response.json())
         events = []
-        verified_disclosures = 0
+        verified_items = 0
 
-        for entry in entries[:150]:
-            link = str(entry.get("link") or "").strip()
-            kap_id = _kap_id_from_link(link)
-            if not kap_id or not _official_kap_url(link):
+        for item in items:
+            if not isinstance(item, dict) or item.get("disclosureIndex") is None:
                 continue
-
-            verified_disclosures += 1
-            title = _plain_html(entry.get("title"))
-            summary = _plain_html(
-                entry.get("summary")
-                or entry.get("description")
-                or entry.get("content")
-            )
-            row_events = _build_events(
-                kap_id=kap_id,
-                title=title,
-                summary=summary,
-                link=link,
-                event_time=_entry_time(entry),
-                allowed=allowed,
-            )
-            for event in row_events:
-                event["time_verified"] = True
-            events.extend(row_events)
+            verified_items += 1
+            events.extend(_event_from_item(item, allowed, source))
 
         _source_health(
             source,
             ok=True,
             status="healthy",
             latency_ms=latency,
-            entry_count=len(entries),
-            verified_count=verified_disclosures,
+            entry_count=len(items),
+            verified_count=verified_items,
             http_status=response.status_code,
         )
+        _set_backoff(source, True)
         return events
 
     except Exception as exc:
@@ -457,247 +475,282 @@ def fetch_rss_events(fallback_symbols):
             verified_count=0,
             error=exc,
         )
+        _set_backoff(source, False)
         return []
 
 
-def _parse_html_event_time(cells):
-    if not cells:
+def _upsert_event(event):
+    event_key = f"{event['kap_id']}:{event['symbol']}"
+    now = _now().isoformat()
+
+    raw_hash = hashlib.sha256(
+        json.dumps(
+            event.get("raw_item") or {
+                "kap_id": event["kap_id"],
+                "symbol": event["symbol"],
+                "subject": event.get("subject"),
+                "summary": event.get("summary"),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT event_key, detail_verified FROM kap_events WHERE event_key = ?",
+        (event_key,),
+    )
+    previous = cur.fetchone()
+    existed = previous is not None
+
+    cur.execute("""
+    INSERT INTO kap_events (
+        event_key, kap_id, symbol, company_title, disclosure_class,
+        disclosure_type, disclosure_category, subject, summary, link,
+        event_time, received_at, score, trade_relevant, verified,
+        detail_verified, discovery_source, source_last, raw_hash
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)
+    ON CONFLICT(event_key) DO UPDATE SET
+        company_title = excluded.company_title,
+        disclosure_class = excluded.disclosure_class,
+        disclosure_type = excluded.disclosure_type,
+        disclosure_category = excluded.disclosure_category,
+        subject = excluded.subject,
+        summary = excluded.summary,
+        link = excluded.link,
+        event_time = excluded.event_time,
+        score = excluded.score,
+        trade_relevant = excluded.trade_relevant,
+        verified = 1,
+        source_last = excluded.source_last,
+        raw_hash = excluded.raw_hash
+    """, (
+        event_key,
+        event["kap_id"],
+        event["symbol"],
+        event.get("company_title"),
+        event.get("disclosure_class"),
+        event.get("disclosure_type"),
+        event.get("disclosure_category"),
+        event.get("subject") or "KAP Bildirimi",
+        event.get("summary"),
+        event["link"],
+        event["event_time"].isoformat(),
+        now,
+        float(event.get("score") or 0),
+        1 if event.get("trade_relevant") else 0,
+        event.get("discovery_source"),
+        event.get("discovery_source"),
+        raw_hash,
+    ))
+
+    conn.commit()
+    conn.close()
+    return not existed, event_key
+
+
+def _extract_detail_basic(payload):
+    if isinstance(payload, list) and payload:
+        payload = payload[0]
+    if not isinstance(payload, dict):
         return None
 
-    normalized = " ".join(cells[:5]).strip()
-    low = normalized.lower()
+    disclosure = payload.get("disclosure")
+    if isinstance(disclosure, dict):
+        basic = disclosure.get("disclosureBasic")
+        if isinstance(basic, dict):
+            return basic
 
-    match = re.search(r"(\d{2}[.-]\d{2}[.-]\d{4})\s+(\d{2}:\d{2})", normalized)
-    if match:
-        raw = f"{match.group(1)} {match.group(2)}".replace("-", ".")
-        try:
-            return datetime.strptime(raw, "%d.%m.%Y %H:%M").replace(tzinfo=TR_TZ)
-        except Exception:
-            pass
-
-    tm = re.search(r"(\d{2}:\d{2})", normalized)
-    if tm:
-        try:
-            parsed_time = datetime.strptime(tm.group(1), "%H:%M").time()
-            if "bugün" in low or "today" in low:
-                return datetime.combine(_now().date(), parsed_time, tzinfo=TR_TZ)
-            if "dün" in low or "yesterday" in low:
-                return datetime.combine(
-                    (_now() - timedelta(days=1)).date(),
-                    parsed_time,
-                    tzinfo=TR_TZ,
-                )
-        except Exception:
-            pass
+    for key in ("disclosureBasic", "data"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            return value
 
     return None
 
-def fetch_html_events(fallback_symbols):
-    source = "KAP_HTML"
-    started = time.monotonic()
-    allowed = _allowed_symbol_map(fallback_symbols)
 
+def verify_detail(event):
+    """
+    Second-level verification for a newly discovered event.
+
+    Primary truth is the official list API. Detail API/HTML is a reconciliation
+    layer and never creates a disclosure on its own.
+    """
+    kap_id = event["kap_id"]
+    symbol_clean = _clean_symbol(event["symbol"])
+    detail_url = KAP_DETAIL_API.format(disclosure_index=kap_id)
+
+    started = time.monotonic()
     try:
-        response = SESSION.get(KAP_HTML_URL, timeout=HTTP_TIMEOUT, allow_redirects=True)
+        response = SESSION.get(
+            detail_url,
+            timeout=HTTP_TIMEOUT,
+            allow_redirects=True,
+            headers={"Referer": event["link"]},
+        )
         latency = (time.monotonic() - started) * 1000
 
-        if response.status_code != 200:
-            raise RuntimeError(f"HTTP {response.status_code}")
-        if not _official_kap_url(response.url):
-            raise RuntimeError(f"unexpected redirect host: {response.url}")
-
-        html = response.text
-        marker = _normalize_text(html[:250000])
-        if "bildirim" not in marker:
-            raise RuntimeError("official KAP query marker not found")
-
-        soup = BeautifulSoup(html, "html.parser")
-        events = []
-        seen_ids = set()
-
-        for row in soup.find_all("tr"):
-            link_tag = row.find("a", href=re.compile(r"/(?:tr/|en/)?Bildirim/\d+", re.I))
-            if not link_tag:
-                continue
-
-            href = link_tag.get("href") or ""
-            link = requests.compat.urljoin("https://www.kap.org.tr", href)
-            kap_id = _kap_id_from_link(link)
-            if not kap_id or not _official_kap_url(link):
-                continue
-
-            seen_ids.add(kap_id)
-            cells = [cell.get_text(" ", strip=True) for cell in row.find_all(["td", "th"])]
-            row_text = " | ".join(cells)
-            title = cells[5] if len(cells) > 5 else row_text
-            summary = cells[6] if len(cells) > 6 else row_text
-            parsed_event_time = _parse_html_event_time(cells)
-            event_time = parsed_event_time or _now()
-
-            row_events = _build_events(
-                kap_id=kap_id,
-                title=title,
-                summary=summary + " " + row_text,
-                link=link,
-                event_time=event_time,
-                allowed=allowed,
-            )
-            for event in row_events:
-                event["time_verified"] = parsed_event_time is not None
-            events.extend(row_events)
-
-        # Some KAP versions embed links outside a literal <tr>. Count those too
-        # for source-health validation even if row extraction cannot map symbols.
-        for match in re.finditer(r"/(?:tr/|en/)?Bildirim/(\d+)", html, re.I):
-            seen_ids.add(match.group(1))
-
-        _source_health(
-            source,
-            ok=True,
-            status="healthy" if seen_ids else "reachable_no_rows",
-            latency_ms=latency,
-            entry_count=len(seen_ids),
-            verified_count=len(seen_ids),
-            http_status=response.status_code,
-        )
-        return events
-
+        if response.status_code == 200 and _official_kap_url(response.url):
+            basic = _extract_detail_basic(response.json())
+            if basic:
+                detail_index = basic.get("disclosureIndex")
+                codes = " ".join(
+                    str(basic.get(key) or "")
+                    for key in ("stockCode", "stockCodes", "relatedStocks")
+                )
+                id_matches = str(detail_index) == str(kap_id)
+                symbol_matches = (
+                    not codes
+                    or symbol_clean in set(
+                        re.findall(r"[A-Z0-9]{2,8}", codes.upper())
+                    )
+                )
+                if id_matches and symbol_matches:
+                    _source_health(
+                        "KAP_DETAIL_API",
+                        ok=True,
+                        status="healthy",
+                        latency_ms=latency,
+                        entry_count=1,
+                        verified_count=1,
+                        http_status=response.status_code,
+                    )
+                    return True
     except Exception as exc:
-        latency = (time.monotonic() - started) * 1000
-        _source_health(
-            source,
-            ok=False,
-            status="error",
-            latency_ms=latency,
-            entry_count=0,
-            verified_count=0,
-            error=exc,
-        )
-        return []
+        api_error = exc
+    else:
+        api_error = RuntimeError("detail API verification mismatch")
 
+    _source_health(
+        "KAP_DETAIL_API",
+        ok=False,
+        status="error",
+        latency_ms=(time.monotonic() - started) * 1000,
+        entry_count=0,
+        verified_count=0,
+        error=api_error,
+    )
 
-def fetch_api_events(fallback_symbols):
-    if not KAP_API_ENABLED:
-        return []
-
-    source = "KAP_API"
+    # Last-resort verification: official disclosure HTML page.
     started = time.monotonic()
-    allowed = _allowed_symbol_map(fallback_symbols)
-
     try:
-        response = SESSION.get(KAP_API_URL, timeout=HTTP_TIMEOUT, allow_redirects=True)
+        response = SESSION.get(
+            event["link"],
+            timeout=HTTP_TIMEOUT,
+            allow_redirects=True,
+            headers={"Accept": "text/html,application/xhtml+xml"},
+        )
         latency = (time.monotonic() - started) * 1000
 
-        if response.status_code != 200:
+        if response.status_code != 200 or not _official_kap_url(response.url):
             raise RuntimeError(f"HTTP {response.status_code}")
-        if not _official_kap_url(response.url):
-            raise RuntimeError(f"unexpected redirect host: {response.url}")
 
-        payload = response.json()
-        if not isinstance(payload, list):
-            raise RuntimeError("unexpected API schema")
+        text = BeautifulSoup(response.text, "html.parser").get_text(" ", strip=True)
+        upper = text.upper()
 
-        events = []
-        verified_count = 0
-
-        for item in payload[:200]:
-            kap_id = item.get("disclosureIndex")
-            if kap_id is None:
-                continue
-
-            kap_id = str(kap_id)
-            verified_count += 1
-            title = str(item.get("title") or "")
-            summary = str(item.get("summary") or "")
-            codes = str(item.get("stockCodes") or "")
-            link = f"https://www.kap.org.tr/tr/Bildirim/{kap_id}"
-
-            event_time = _now()
-            row_events = _build_events(
-                kap_id=kap_id,
-                title=title,
-                summary=f"{summary} {codes}",
-                link=link,
-                event_time=event_time,
-                allowed=allowed,
-            )
-            for event in row_events:
-                event["time_verified"] = False
-            events.extend(row_events)
+        if symbol_clean not in upper:
+            raise RuntimeError("symbol not found on official disclosure page")
 
         _source_health(
-            source,
+            "KAP_HTML_DETAIL",
             ok=True,
             status="healthy",
             latency_ms=latency,
-            entry_count=len(payload),
-            verified_count=verified_count,
+            entry_count=1,
+            verified_count=1,
             http_status=response.status_code,
         )
-        return events
+        return True
 
     except Exception as exc:
-        latency = (time.monotonic() - started) * 1000
         _source_health(
-            source,
+            "KAP_HTML_DETAIL",
             ok=False,
             status="error",
-            latency_ms=latency,
+            latency_ms=(time.monotonic() - started) * 1000,
             entry_count=0,
             verified_count=0,
             error=exc,
         )
-        return []
+        return False
+
+
+def _mark_detail_verified(event_key):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE kap_events SET detail_verified = 1 WHERE event_key = ?",
+        (event_key,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _should_poll(source, interval, force):
+    now_ts = time.time()
+    if force:
+        return True
+    if now_ts < _NEXT_ALLOWED.get(source, 0.0):
+        return False
+    return now_ts - _LAST_ATTEMPT.get(source, 0.0) >= interval
 
 
 def poll_kap(fallback_symbols, force=False):
     """
-    Poll official KAP sources and return only newly discovered, verified,
-    trade-relevant events. All verified disclosures are persisted for audit.
+    Discover disclosures from KAP's official public JSON backend.
 
-    Priority:
-      1) KAP official RSS (frequent)
-      2) KAP official public disclosure-query HTML (5-minute reconciliation)
-      3) subscriber REST API only when explicitly enabled
+    IGS = listed-company disclosures (primary, ~60s in active hours)
+    DDK = regulatory/market notices (lower frequency, used by restrictions too)
+
+    A first process-start poll also queries yesterday separately so an overnight
+    server restart does not lose after-close disclosures.
     """
     init_kap_store()
-    now_ts = time.time()
     candidates = []
 
-    rss_attempted = False
-    if force or now_ts - _LAST_ATTEMPT["KAP_RSS"] >= RSS_MIN_INTERVAL:
-        rss_attempted = True
-        _LAST_ATTEMPT["KAP_RSS"] = now_ts
-        candidates.extend(("KAP_RSS", e) for e in fetch_rss_events(fallback_symbols))
+    for member_type in ("IGS", "DDK"):
+        source = f"KAP_API_{member_type}"
+        interval = _base_interval(member_type)
 
-    rss_healthy = _source_is_healthy("KAP_RSS")
-    html_age = now_ts - _LAST_ATTEMPT["KAP_HTML"]
-    html_due = force or html_age >= HTML_RECONCILE_INTERVAL
-    if rss_attempted and not rss_healthy and html_age >= HTML_FAILOVER_INTERVAL:
-        html_due = True
+        if not _should_poll(source, interval, force):
+            continue
 
-    if html_due:
-        _LAST_ATTEMPT["KAP_HTML"] = now_ts
-        candidates.extend(("KAP_HTML", e) for e in fetch_html_events(fallback_symbols))
+        _LAST_ATTEMPT[source] = time.time()
+        today = _now().date()
+        candidates.extend(fetch_public_api_events(
+            fallback_symbols,
+            member_type=member_type,
+            day=today,
+        ))
 
-    if KAP_API_ENABLED and (force or now_ts - _LAST_ATTEMPT["KAP_API"] >= HTML_RECONCILE_INTERVAL):
-        _LAST_ATTEMPT["KAP_API"] = now_ts
-        candidates.extend(("KAP_API", e) for e in fetch_api_events(fallback_symbols))
+        if source not in _BOOTSTRAPPED:
+            yesterday = today - timedelta(days=1)
+            candidates.extend(fetch_public_api_events(
+                fallback_symbols,
+                member_type=member_type,
+                day=yesterday,
+            ))
+            _BOOTSTRAPPED.add(source)
 
-    new_events = []
+    new_trade_events = []
+    detail_budget = DETAIL_VERIFY_BUDGET
     seen = set()
 
-    for source, event in candidates:
+    # Newest first so detail budget is spent on freshest events.
+    candidates.sort(key=lambda e: e["event_time"], reverse=True)
+
+    for event in candidates:
         key = f"{event['kap_id']}:{event['symbol']}"
-
-        was_new = _upsert_event(event, source)
-        if not was_new or key in seen:
+        if key in seen:
             continue
-
         seen.add(key)
-        if not event.get("trade_relevant"):
-            continue
-        if not event.get("time_verified"):
+
+        was_new, event_key = _upsert_event(event)
+        if not was_new:
             continue
 
         try:
@@ -705,10 +758,25 @@ def poll_kap(fallback_symbols, force=False):
         except Exception:
             continue
 
-        if -2 <= age_minutes <= 30:
-            new_events.append(event)
+        # Verify fresh/overnight trade-relevant events through a second official
+        # endpoint where budget allows. Primary-list verification remains valid.
+        if (
+            event.get("trade_relevant")
+            and -2 <= age_minutes <= 1080
+            and detail_budget > 0
+        ):
+            detail_budget -= 1
+            if verify_detail(event):
+                _mark_detail_verified(event_key)
+                event["detail_verified"] = True
+            else:
+                event["detail_verified"] = False
 
-    return new_events
+        # Immediate intraday event path only receives genuinely fresh records.
+        if event.get("trade_relevant") and -2 <= age_minutes <= 30:
+            new_trade_events.append(event)
+
+    return new_trade_events
 
 
 def get_kap_health():
@@ -726,14 +794,14 @@ def get_kap_health():
 
     since = (_now() - timedelta(hours=24)).isoformat()
     cur.execute(
-        "SELECT COUNT(*) AS c FROM kap_events WHERE verified = 1 AND received_at >= ?",
+        "SELECT COUNT(*) AS c FROM kap_events WHERE verified = 1 AND event_time >= ?",
         (since,),
     )
     verified_24h = int(cur.fetchone()["c"])
 
     cur.execute("""
-    SELECT kap_id, symbol, title, link, event_time, score, trade_relevant,
-           rss_seen, html_seen, api_seen
+    SELECT kap_id, symbol, company_title, subject, summary, link, event_time,
+           score, trade_relevant, detail_verified, discovery_source
     FROM kap_events
     WHERE verified = 1
     ORDER BY event_time DESC
@@ -743,15 +811,23 @@ def get_kap_health():
 
     conn.close()
 
-    healthy_sources = [
-        s for s in sources
-        if s.get("status") in ("healthy", "reachable_no_rows")
-        and s.get("last_success")
-    ]
+    igs = next((s for s in sources if s.get("source") == "KAP_API_IGS"), None)
+    ddk = next((s for s in sources if s.get("source") == "KAP_API_DDK"), None)
 
-    overall = "healthy" if healthy_sources else "down"
-    if healthy_sources and all(s.get("source") != "KAP_RSS" for s in healthy_sources):
-        overall = "degraded"
+    overall = "down"
+    if igs and igs.get("status") == "healthy":
+        overall = "healthy"
+        if ddk and ddk.get("status") == "error":
+            overall = "degraded"
+    elif igs and igs.get("last_success"):
+        try:
+            last_success = datetime.fromisoformat(igs["last_success"])
+            if last_success.tzinfo is None:
+                last_success = last_success.replace(tzinfo=TR_TZ)
+            if (_now() - last_success).total_seconds() <= 600:
+                overall = "degraded"
+        except Exception:
+            pass
 
     return {
         "overall": overall,
@@ -768,8 +844,8 @@ def get_recent_verified_events(hours=72, contains=None, limit=100):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
-    SELECT kap_id, symbol, title, summary, link, event_time, score,
-           trade_relevant, rss_seen, html_seen, api_seen
+    SELECT kap_id, symbol, company_title, subject, summary, link, event_time,
+           score, trade_relevant, detail_verified, discovery_source
     FROM kap_events
     WHERE verified = 1
       AND event_time >= ?
@@ -783,9 +859,11 @@ def get_recent_verified_events(hours=72, contains=None, limit=100):
     if contains:
         needle = _normalize_text(contains)
         rows = [
-            row for row in rows
+            row
+            for row in rows
             if needle in _normalize_text(
-                f"{row.get('title', '')} {row.get('summary', '')}"
+                f"{row.get('subject', '')} {row.get('summary', '')} "
+                f"{row.get('company_title', '')}"
             )
         ]
 
@@ -799,7 +877,8 @@ def recent_kap_cache(minutes=30):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
-    SELECT kap_id, symbol, title, summary, link, event_time, score
+    SELECT kap_id, symbol, company_title, subject, summary, link, event_time,
+           score, detail_verified, discovery_source
     FROM kap_events
     WHERE verified = 1
       AND trade_relevant = 1
@@ -821,14 +900,15 @@ def recent_kap_cache(minutes=30):
 
         result[symbol] = {
             "kap_id": d["kap_id"],
-            "title": d["title"],
+            "title": d["subject"] or d["company_title"] or "KAP Bildirimi",
             "summary": d["summary"],
             "link": d["link"],
-            # Keep legacy consumers safe: local naive datetime.
             "time": event_time.replace(tzinfo=None),
             "published_at": event_time.isoformat(),
             "score": d["score"],
             "verified": True,
+            "detail_verified": bool(d["detail_verified"]),
+            "source": d["discovery_source"],
         }
 
     conn.close()
