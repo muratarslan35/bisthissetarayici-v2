@@ -108,6 +108,42 @@ class KapServiceTests(unittest.TestCase):
         with patch.object(kap_service.SESSION, "get", return_value=response):
             self.assertTrue(kap_service.verify_detail(event))
 
+
+    def test_unverified_detail_never_reaches_trade_cache(self):
+        event = {
+            "kap_id": "999002",
+            "symbol": "GESAN.IS",
+            "company_title": "GİRİŞİM ELEKTRİK",
+            "disclosure_class": "ODA",
+            "disclosure_type": "ODA",
+            "disclosure_category": "ODA",
+            "subject": "Yeni İş İlişkisi",
+            "summary": "GESAN sözleşme",
+            "link": "https://www.kap.org.tr/tr/Bildirim/999002",
+            "event_time": datetime.now(TR_TZ),
+            "score": 24,
+            "trade_relevant": True,
+            "discovery_source": "KAP_API_IGS",
+            "raw_item": {"disclosureIndex": 999002},
+        }
+
+        def fake_fetch(symbols, member_type="IGS", day=None):
+            return [dict(event)] if member_type == "IGS" else []
+
+        with patch(
+            "kap_service.fetch_public_api_events",
+            side_effect=fake_fetch,
+        ), patch("kap_service.verify_detail", return_value=False):
+            emitted = kap_service.poll_kap(["GESAN.IS"], force=True)
+
+        self.assertEqual(emitted, [])
+        cached = kap_service.recent_kap_cache(minutes=30)
+        self.assertNotIn("GESAN.IS", cached)
+
+        health = kap_service.get_kap_health()
+        self.assertEqual(health["verified_events_24h"], 1)
+        self.assertFalse(health["recent"][0]["detail_verified"])
+
     def test_poll_persists_once_and_suppresses_duplicate_alert(self):
         event = {
             "kap_id": "999001",
