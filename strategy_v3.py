@@ -545,8 +545,10 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
                     sig["holding_horizon"] = "2-10 işlem günü"
                     candidates.append(sig)
 
-    kap = _fresh_kap(symbol, kap_cache)
-    if kap and trend_up and four_hour_up and rs_pct >= 0.80:
+    # Position engine may use a verified KAP released after the previous
+    # close; keep it eligible into the next session.
+    kap = _fresh_kap(symbol, kap_cache, max_minutes=1080)
+    if kap and kap.get("verified") and trend_up and four_hour_up and rs_pct >= 0.80:
         score = 72 + rs_pct * 16 + min(8, max(0, _num(kap.get("score"), 0.0) or 0.0))
         reasons = [
             "Taze KAP olayı",
@@ -704,8 +706,9 @@ def evaluate_intraday_signals(item, ctx, kap_cache=None):
                 candidates.append(sig)
 
     # 3) KAP EVENT MOMENTUM: event and technical confirmation are measured separately.
-    kap = _fresh_kap(symbol, kap_cache)
-    if kap and trend_up and above_vwap and rs_pct >= 0.75 and velocity > 0:
+    # Intraday KAP momentum must be genuinely fresh and verified.
+    kap = _fresh_kap(symbol, kap_cache, max_minutes=30)
+    if kap and kap.get("verified") and trend_up and above_vwap and rs_pct >= 0.75 and velocity > 0:
         kap_score = _num(kap.get("score"), 0.0) or 0.0
         score = 62 + rs_pct * 16 + min(10, max(0.0, kap_score))
         if srvol >= 1.10:
