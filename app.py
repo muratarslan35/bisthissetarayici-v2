@@ -46,6 +46,7 @@ from dashboard_store import (
     update_worker_heartbeat,
     persist_market_snapshot,
 )
+from resource_guard import host_pressure_state
 from signal_engine import (
     process_symbol_signals,
     update_success_targets,
@@ -1119,6 +1120,27 @@ def scanner_loop():
             # --------------------------------------------------
             # MARKET DATA
             # --------------------------------------------------
+
+            # --------------------------------------------------
+            # MARKET DATA (SHARED-HOST RESOURCE GUARD)
+            # --------------------------------------------------
+            # IMS is the latency-sensitive application on this host. Before
+            # starting the expensive Yahoo/universe cycle, BIST cooperatively
+            # yields when system memory or CPU pressure is high. KAP polling,
+            # heartbeat and lightweight housekeeping above still continue.
+            pressure = host_pressure_state()
+            if pressure.should_yield:
+                print(
+                    "BIST RESOURCE YIELD "
+                    f"reason={pressure.reason} "
+                    f"available_mb={pressure.available_mb} "
+                    f"available_ratio={pressure.available_ratio:.1%} "
+                    f"load_per_cpu={pressure.load_per_cpu} "
+                    f"backoff={pressure.backoff_seconds}s",
+                    flush=True,
+                )
+                time.sleep(pressure.backoff_seconds)
+                continue
 
             # --------------------------------------------------
             # MARKET DATA (NON-BLOCKING)
