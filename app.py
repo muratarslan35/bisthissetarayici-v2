@@ -38,6 +38,7 @@ from trade_ledger import (
     init_trade_ledger,
     record_signal,
     update_open_trades,
+    get_open_trade_symbols,
     format_trade_event,
 )
 from dashboard_store import (
@@ -1190,6 +1191,10 @@ def scanner_loop():
                     market_open=True,
                 )
 
+            # Query open paper symbols once per market snapshot instead of
+            # once per each of ~279 symbols.
+            open_trade_symbols = get_open_trade_symbols() if TRADING_V3_ENABLED else set()
+
             # ==================================================
             # 🔁 MAIN LOOP
             # ==================================================
@@ -1237,12 +1242,13 @@ def scanner_loop():
                     try:
                         # Persist and update paper-trade lifecycle before evaluating
                         # fresh entries. Bot and channel positions are independent.
-                        for event in update_open_trades(symbol, price):
-                            event_msg = format_trade_event(event)
-                            if event.get("scope") == "INTRADAY":
-                                send_to_channel(event_msg)
-                            else:
-                                broadcast_signal(event_msg)
+                        if symbol in open_trade_symbols:
+                            for event in update_open_trades(symbol, price):
+                                event_msg = format_trade_event(event)
+                                if event.get("scope") == "INTRADAY":
+                                    send_to_channel(event_msg)
+                                else:
+                                    broadcast_signal(event_msg)
 
                         position_signals = evaluate_position_signals(
                             item, market_context, kap_cache=kap_cache
