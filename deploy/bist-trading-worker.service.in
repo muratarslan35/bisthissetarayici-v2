@@ -1,0 +1,64 @@
+[Unit]
+Description=BIST Trading Scanner Worker
+After=network-online.target bist-trading-web.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Slice=bist-trading.slice
+User=@BIST_USER@
+Group=@BIST_GROUP@
+WorkingDirectory=@BIST_PATH@
+
+Environment=APP_ENV=production
+Environment=PYTHONUNBUFFERED=1
+Environment=MALLOC_ARENA_MAX=2
+Environment=OMP_NUM_THREADS=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=MKL_NUM_THREADS=1
+Environment=NUMEXPR_NUM_THREADS=1
+
+# Cooperative pressure guard. Hard cgroup limits remain the final boundary.
+Environment=BIST_MIN_AVAILABLE_MEMORY_MB=512
+Environment=BIST_MIN_AVAILABLE_MEMORY_RATIO=0.15
+Environment=BIST_MAX_LOAD_PER_CPU=0.90
+Environment=BIST_PRESSURE_BACKOFF_SECONDS=15
+
+# Free-data/rate-limit defaults.
+Environment=TRADING_V3_ENABLED=1
+Environment=ENABLE_ULTRA_PRICE_ENGINE=0
+Environment=YF_BATCH_SIZE=35
+Environment=YF_INTRADAY_TTL_SECONDS=300
+Environment=YF_DAILY_TTL_SECONDS=21600
+
+EnvironmentFile=-@BIST_PATH@/.env
+EnvironmentFile=-/etc/bist-trading.env
+
+ExecStart=@BIST_PATH@/venv/bin/python @BIST_PATH@/worker.py
+TimeoutStopSec=45
+Restart=always
+RestartSec=5
+
+# Scanner always yields to IMS under contention.
+Nice=12
+CPUAccounting=true
+CPUWeight=10
+CPUQuota=70%
+MemoryAccounting=true
+MemoryHigh=25%
+MemoryMax=32%
+MemorySwapMax=4%
+IOAccounting=true
+IOWeight=10
+IOSchedulingClass=idle
+OOMScoreAdjust=800
+TasksMax=96
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=@BIST_PATH@
+
+[Install]
+WantedBy=multi-user.target
