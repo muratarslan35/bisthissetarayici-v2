@@ -23,7 +23,8 @@ def make_key(*parts):
 # PERSIST CONFIG (HAFTALIK + CUMA)
 # ======================================================
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))\nDATA_DIR = os.path.join(BASE_DIR, "data")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
 
 DAILY_STATE_FILE = os.path.join(DATA_DIR, "daily_state.json")
 WEEKLY_STATE_FILE = os.path.join(DATA_DIR, "weekly_state.json")
