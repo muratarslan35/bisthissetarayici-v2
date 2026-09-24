@@ -287,12 +287,33 @@ def fetch_market_snapshot(symbols):
             continue
 
         bar_time = intraday.index[-1]
+        try:
+            age_minutes = max(
+                0.0,
+                (pd.Timestamp(fetched_at) - pd.Timestamp(bar_time)).total_seconds() / 60.0,
+            )
+        except Exception:
+            age_minutes = 999.0
+
+        confidence = 100
+        if age_minutes > 50:
+            confidence -= 35
+        elif age_minutes > 35:
+            confidence -= 20
+        if len(intraday) < 200:
+            confidence -= 15
+        if len(daily) < 220:
+            confidence -= 20
+        confidence = max(0, min(100, confidence))
+
         results.append({
             "symbol": symbol,
             "current_price": price,
             "tf": tf,
             "fetched_at": fetched_at,
             "source_bar_time": bar_time,
+            "data_age_minutes": round(age_minutes, 1),
+            "data_confidence": confidence,
             "data_source": "YAHOO_BATCH",
         })
 
