@@ -22,10 +22,10 @@ jobs:
     environment: production
 
     env:
-      BIST_HOST: ${{ vars.BIST_SERVER_HOST }}
+      BIST_HOST: 130.162.48.162
       BIST_PORT: ${{ vars.BIST_SERVER_PORT || '22' }}
       BIST_USER: ${{ vars.BIST_SERVER_USER || 'ubuntu' }}
-      BIST_PATH: ${{ vars.BIST_DEPLOY_PATH }}
+      BIST_PATH: /home/ubuntu/bistbot
 
     steps:
       - name: Validate connection configuration
