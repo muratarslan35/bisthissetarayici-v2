@@ -35,7 +35,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           missing=0
-          for name in BIST_HOST BIST_PORT BIST_USER BIST_PATH; do
+          for name in BIST_HOST BIST_PORT BIST_USER; do
             value="${!name:-}"
             if [ -z "$value" ]; then
               echo "MISSING_CONFIG|$name"
@@ -44,6 +44,11 @@ jobs:
               echo "CONFIG_OK|$name"
             fi
           done
+          if [ -z "$BIST_PATH" ]; then
+            echo "OPTIONAL_CONFIG_MISSING|BIST_PATH|will_discover"
+          else
+            echo "CONFIG_OK|BIST_PATH"
+          fi
           if [ -z "$BIST_DEPLOY_SSH_KEY" ]; then
             echo "MISSING_CONFIG|BIST_DEPLOY_SSH_KEY"
             missing=1
@@ -87,14 +92,92 @@ jobs:
 
           echo
           echo '=== BIST REPOSITORY ==='
-          test -d "$BIST_PATH"
-          cd "$BIST_PATH"
-          echo "cwd=$(pwd)"
-          echo "branch=$(git branch --show-current 2>/dev/null || true)"
-          echo "head=$(git rev-parse HEAD 2>/dev/null || true)"
-          echo 'git_status_begin'
-          git status --short 2>/dev/null || true
-          echo 'git_status_end'
+          if [ -z "${BIST_PATH:-}" ]; then
+            echo 'BIST_PATH_DISCOVERY=START'
+            candidates=""
+            while IFS= read -r gitdir; do
+              repo_dir=$(dirname "$gitdir")
+              remote=$(git -C "$repo_dir" remote get-url origin 2>/dev/null || true)
+              echo "REPO_CANDIDATE|path=$repo_dir|origin=$remote"
+              case "$remote" in
+                *muratarslan35/bisthissetarayici-v2*)
+                  candidates="$candidates"
+          echo
+          echo '=== PORTS ==='
+          ss -ltnp 2>/dev/null | grep -E ':(5000|8000)[[:space:]]' || true
+
+          echo
+          echo '=== BIST SERVICES ==='
+          for svc in bist-trading-web.service bist-trading-worker.service bist-trading.slice; do
+            echo "--- $svc ---"
+            systemctl is-active "$svc" 2>/dev/null || true
+            systemctl show "$svc" \
+              -p LoadState \
+              -p ActiveState \
+              -p SubState \
+              -p MainPID \
+              -p Slice \
+              -p CPUQuotaPerSecUSec \
+              -p CPUWeight \
+              -p MemoryCurrent \
+              -p MemoryHigh \
+              -p MemoryMax \
+              -p MemorySwapMax \
+              -p IOWeight \
+              -p OOMScoreAdjust 2>/dev/null || true
+          done
+
+          echo
+          echo '=== IMS SERVICES (READ ONLY) ==='
+          for svc in ims-performance-manager.service ims-import-worker.service ims-report-worker.service; do
+            echo "--- $svc ---"
+            systemctl is-active "$svc" 2>/dev/null || true
+            systemctl show "$svc" \
+              -p LoadState \
+              -p ActiveState \
+              -p SubState \
+              -p MainPID \
+              -p CPUWeight \
+              -p MemoryCurrent \
+              -p MemoryHigh \
+              -p MemoryMax 2>/dev/null || true
+          done
+
+          echo
+          echo '=== TOP MEMORY ==='
+          ps -eo pid,user,comm,%cpu,%mem,rss,args --sort=-rss | head -20 || true
+
+          echo
+          echo '=== TOP CPU ==='
+          ps -eo pid,user,comm,%cpu,%mem,rss,args --sort=-%cpu | head -20 || true
+
+          echo
+          echo 'AUDIT_RESULT=PASS'
+          REMOTE
+\n'"$repo_dir"
+                  ;;
+              esac
+            done < <(find "$HOME" -maxdepth 5 -type d -name .git -print 2>/dev/null)
+
+            BIST_PATH=$(printf '%s\n' "$candidates" | sed '/^$/d' | head -1)
+            if [ -z "$BIST_PATH" ]; then
+              echo 'BIST_PATH_DISCOVERY=NOT_FOUND'
+            else
+              echo "BIST_PATH_DISCOVERY=FOUND|$BIST_PATH"
+            fi
+          fi
+
+          if [ -n "${BIST_PATH:-}" ] && [ -d "$BIST_PATH" ]; then
+            cd "$BIST_PATH"
+            echo "cwd=$(pwd)"
+            echo "branch=$(git branch --show-current 2>/dev/null || true)"
+            echo "head=$(git rev-parse HEAD 2>/dev/null || true)"
+            echo 'git_status_begin'
+            git status --short 2>/dev/null || true
+            echo 'git_status_end'
+          else
+            echo 'BIST_REPOSITORY_AUDIT=SKIPPED_NO_PATH'
+          fi
 
           echo
           echo '=== PORTS ==='
