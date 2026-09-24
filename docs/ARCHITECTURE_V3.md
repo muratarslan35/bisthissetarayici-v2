@@ -159,77 +159,127 @@ processes the full universe only when a new snapshot or fresh KAP event exists.
 KAP data is ingested once through a central verified service. Trading logic and
 restriction filters do not maintain separate social-media/RSS readers.
 
-### Free-source priority
+### Current free source
 
-1. **Official KAP RSS** — primary low-latency free source, polled about once per minute.
-2. **Official KAP public disclosure-query HTML** — reconciliation every 30 minutes,
-   or 5-minute failover when RSS health fails.
-3. **KAP REST dissemination API** — disabled by default because KAP documents it as
-   a subscriber data-dissemination integration. It can be explicitly enabled with
-   `KAP_API_ENABLED=1` when legitimate service access exists.
+The former `/tr/rss/all` endpoint returns HTTP 404 on the current KAP site and is not
+used.
 
+Primary discovery uses the public JSON backend used by the KAP web application:
+
+```text
+POST https://www.kap.org.tr/tr/api/disclosure/members/byCriteria
+```
+
+Two member groups are queried:
+- `IGS` — listed-company disclosures, primary trading source.
+- `DDK` — regulatory/market disclosures, lower-frequency source used by restriction
+  workflows such as brüt-takas monitoring.
+
+The project does **not** depend on KAP's separate subscriber data-dissemination product.
 Third-party Twitter/Nitter feeds are not accepted as trade-event sources.
 
-### Verification
+### Structured parsing
 
-A disclosure becomes a verified KAP event only when:
-- the source resolves to `kap.org.tr` / a KAP subdomain,
-- a numeric KAP disclosure ID is extracted,
-- the link is an official `/Bildirim/<id>` link,
-- at least one symbol maps to the configured BIST universe.
+The list API returns structured fields such as:
+- `disclosureIndex`
+- `publishDate`
+- `kapTitle`
+- `subject`
+- `summary`
+- `stockCodes`
+- `relatedStocks`
+- disclosure class/type/category
 
-All verified events are stored in `kap_events`. Source health is stored in
+Symbol mapping and publication time therefore come from JSON fields rather than title
+string slicing or a brittle HTML table parser.
+
+### Second-level verification
+
+New trade-relevant disclosures can be reconciled through:
+
+```text
+GET /tr/api/notification/attachment-detail/<disclosureIndex>
+```
+
+If that endpoint is temporarily unavailable, the official
+`/tr/Bildirim/<disclosureIndex>` page is a last-resort verification layer.
+
+A detail failure does not invent or create an event: only an event discovered through
+the official list API can enter `kap_events`.
+
+### Verification and dedupe
+
+A disclosure is accepted only when:
+- the response remains on `kap.org.tr`,
+- a numeric `disclosureIndex` exists,
+- `publishDate` parses to an authoritative timestamp,
+- at least one structured stock code maps to the configured BIST universe.
+
+The durable key is `<disclosureIndex>:<symbol>`.
+
+All accepted events are stored in `kap_events`; source health is stored in
 `kap_source_health`.
 
-Only trade-relevant events with a verified publication timestamp and age <= 30 minutes
-can become intraday KAP candidates. Reconciliation rows with uncertain timestamps are
-audit-only and cannot masquerade as fresh signals.
+### Freshness by strategy
 
-Position signals can use a verified after-close KAP event into the next trading session;
-intraday KAP momentum requires a much fresher event.
+- **INTRADAY / channel:** verified KAP event must be no more than 30 minutes old.
+- **POSITION / bot:** verified after-close events may remain eligible into the next
+  trading session (up to 18 hours).
+
+The worker monitors KAP even while the equity market is closed, so an after-hours filing
+is not lost.
+
+### Request discipline
+
+- IGS: about once per minute during active hours.
+- DDK: about once every five minutes.
+- Off-hours IGS cadence is reduced.
+- failures trigger exponential backoff.
+- process startup queries today and yesterday separately once, preventing after-close
+  data loss after a restart while avoiding oversized multi-day responses.
 
 ### Health and observability
 
 The dashboard exposes:
-- KAP overall health,
-- per-source last success / HTTP status / latency,
+- overall KAP health,
+- `KAP_API_IGS` / `KAP_API_DDK` status,
+- detail API / HTML fallback status when used,
+- last successful request,
+- HTTP status and latency,
 - parsed and verified counts,
 - consecutive failures,
 - verified events in the last 24 hours,
-- recent KAP IDs and whether RSS/HTML reconciliation saw them.
+- recent KAP IDs and detail-verification state.
 
-`/health` exposes aggregate KAP status without disclosure details.
+`/health` exposes aggregate KAP status without disclosure contents.
 
 ### Brüt-takas integration
 
-Brüt-takas logic consumes KAP IDs already verified by the central KAP service.
-It does not run its own independent KAP feed reader.
+Brüt-takas logic consumes KAP IDs already verified by the central KAP service and no
+longer owns a second feed reader.
 
-Restriction extraction uses a deterministic parser first. Gemini may enrich/fallback,
-but AI is not the sole basis for the restriction flag.
+Restriction extraction uses a deterministic parser first. Gemini can enrich/fallback,
+but AI is not the sole basis for a restriction flag.
 
-### Runtime cadence
+### Runtime flow
 
 ```text
-KAP RSS (60s)
-      |
-      v
-official-source validation
-      |
-      v
-KAP ID + symbol parser
-      |
-      +------> kap_events (audit/dedupe)
-      |
-      +------> fresh event cache
-                   |
-          +--------+--------+
-          |                 |
-   POSITION engine     INTRADAY engine
-
-KAP public HTML
-  30m reconciliation
-  5m RSS-failover
-      |
-      +------> confirms/mends kap_events
+KAP public JSON API
+  IGS 60s / DDK 5m
+         |
+         v
+schema + host validation
+         |
+         v
+disclosureIndex + publishDate + stockCodes
+         |
+         +------> kap_events (audit / dedupe)
+         |
+         +------> optional detail API verification
+         |
+         +------> recent verified cache
+                      |
+             +--------+--------+
+             |                 |
+      POSITION engine     INTRADAY engine
 ```
