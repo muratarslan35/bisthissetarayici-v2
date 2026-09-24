@@ -26,11 +26,12 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$KEY" > ~/.ssh/key
           chmod 600 ~/.ssh/key
-          ssh-keyscan -H 89.168.99.141 >> ~/.ssh/known_hosts
+          ssh-keyscan -T 5 -H 89.168.99.141 >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Read-only target audit
         run: |
           set -Eeuo pipefail
-          ssh -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 \
-            opc@89.168.99.141 \
+          ssh -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=15 ubuntu@89.168.99.141 \
             'echo TARGET_SSH_OK; id; hostname; uname -a; nproc; free -h; df -h /'
