@@ -346,4 +346,17 @@ def get_dashboard_data():
     }
 
     conn.close()
+
+    try:
+        from kap_service import get_kap_health
+        payload["kap"] = get_kap_health()
+    except Exception as exc:
+        payload["kap"] = {
+            "overall": "error",
+            "verified_events_24h": 0,
+            "sources": [],
+            "recent": [],
+            "error": str(exc),
+        }
+
     return payload
