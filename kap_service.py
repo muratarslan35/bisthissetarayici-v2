@@ -28,9 +28,12 @@ KAP_HTML_URL = os.getenv(
 KAP_API_ENABLED = os.getenv("KAP_API_ENABLED", "0") == "1"
 KAP_API_URL = os.getenv("KAP_API_URL", "https://www.kap.org.tr/tr/api/disclosures")
 
-RSS_MIN_INTERVAL = max(20, int(os.getenv("KAP_RSS_MIN_INTERVAL_SECONDS", "45")))
+RSS_MIN_INTERVAL = max(30, int(os.getenv("KAP_RSS_MIN_INTERVAL_SECONDS", "60")))
 HTML_RECONCILE_INTERVAL = max(
-    180, int(os.getenv("KAP_HTML_RECONCILE_SECONDS", "300"))
+    600, int(os.getenv("KAP_HTML_RECONCILE_SECONDS", "1800"))
+)
+HTML_FAILOVER_INTERVAL = max(
+    180, int(os.getenv("KAP_HTML_FAILOVER_SECONDS", "300"))
 )
 HTTP_TIMEOUT = max(4, int(os.getenv("KAP_HTTP_TIMEOUT_SECONDS", "10")))
 
@@ -275,6 +278,18 @@ def _source_health(source, ok, status, latency_ms, entry_count, verified_count, 
 
     conn.commit()
     conn.close()
+
+
+def _source_is_healthy(source):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT status FROM kap_source_health WHERE source = ?",
+        (source,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return bool(row and row["status"] in ("healthy", "reachable_no_rows"))
 
 
 def _upsert_event(event, source):
@@ -649,11 +664,19 @@ def poll_kap(fallback_symbols, force=False):
     now_ts = time.time()
     candidates = []
 
+    rss_attempted = False
     if force or now_ts - _LAST_ATTEMPT["KAP_RSS"] >= RSS_MIN_INTERVAL:
+        rss_attempted = True
         _LAST_ATTEMPT["KAP_RSS"] = now_ts
         candidates.extend(("KAP_RSS", e) for e in fetch_rss_events(fallback_symbols))
 
-    if force or now_ts - _LAST_ATTEMPT["KAP_HTML"] >= HTML_RECONCILE_INTERVAL:
+    rss_healthy = _source_is_healthy("KAP_RSS")
+    html_age = now_ts - _LAST_ATTEMPT["KAP_HTML"]
+    html_due = force or html_age >= HTML_RECONCILE_INTERVAL
+    if rss_attempted and not rss_healthy and html_age >= HTML_FAILOVER_INTERVAL:
+        html_due = True
+
+    if html_due:
         _LAST_ATTEMPT["KAP_HTML"] = now_ts
         candidates.extend(("KAP_HTML", e) for e in fetch_html_events(fallback_symbols))
 
