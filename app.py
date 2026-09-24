@@ -38,7 +38,13 @@ from trade_ledger import (
     init_trade_ledger,
     record_signal,
     update_open_trades,
+    get_open_trade_symbols,
     format_trade_event,
+)
+from dashboard_store import (
+    init_dashboard_store,
+    update_worker_heartbeat,
+    persist_market_snapshot,
 )
 from signal_engine import (
     process_symbol_signals,
@@ -122,6 +128,7 @@ app.register_blueprint(dashboard_bp)
 
 init_db()
 init_trade_ledger()
+init_dashboard_store()
 
 # ======================================================
 # GLOBAL TRADE TRACK
@@ -621,7 +628,7 @@ def security():
     if request.path in ("/login", "/register"):
         return
 
-    if request.path.startswith("/api/dashboard") or request.path == "/health":
+    if request.path == "/health":
         return
 
     if request.path.startswith(f"/{ADMIN_PANEL_PATH}") or request.path.startswith("/admin"):
@@ -969,7 +976,7 @@ def scanner_loop():
     send_startup_message()
     
     last_fetch_time = 0
-    FETCH_INTERVAL = 5
+    FETCH_INTERVAL = 60 if TRADING_V3_ENABLED else 5
     last_market_data = []
     kap_cache = {}
     last_kap_check = 0
@@ -979,10 +986,13 @@ def scanner_loop():
     last_daily_report = None
     last_weekly_report = None
     last_momentum_reset = None
+    last_heartbeat = 0
 
     while True:
 
         now = now_tr()
+        snapshot_updated = False
+        kap_changed = False
 
         print(f"\n⏱ Döngü: {now.strftime('%H:%M:%S')}", flush=True)
 
@@ -990,6 +1000,9 @@ def scanner_loop():
         reset_weekly_success_if_needed()
 
         dashboard.SYSTEM_ACTIVE = False
+        if time.time() - last_heartbeat >= 30:
+            update_worker_heartbeat(market_open=is_market_open(now))
+            last_heartbeat = time.time()
 
         try:
 
@@ -1083,6 +1096,7 @@ def scanner_loop():
                     if new_kaps:
 
                         kap_cache.update(new_kaps)
+                        kap_changed = True
 
                         if len(kap_cache) > 500:
                             kap_cache = dict(list(kap_cache.items())[-200:])
@@ -1121,6 +1135,7 @@ def scanner_loop():
                 if isinstance(new_data, list):
                     if len(new_data) > 0:
                         last_market_data = new_data
+                        snapshot_updated = True
                     else:
                         print("⚠ boş veri geldi, eski veri korunuyor")
                 last_fetch_time = time.time()
@@ -1155,12 +1170,30 @@ def scanner_loop():
                 time.sleep(60)
                 continue
 
+            if TRADING_V3_ENABLED and not snapshot_updated and not kap_changed:
+                # Reprocessing the same cached 279-symbol snapshot every few seconds
+                # only creates duplicate CPU/SQLite load. Wait for new market data
+                # or a fresh KAP event.
+                time.sleep(SCAN_INTERVAL)
+                continue
+
             # Build cross-sectional breadth/regime/ranking once per snapshot.
             market_context = (
                 build_market_context(market_data)
                 if TRADING_V3_ENABLED
                 else None
             )
+
+            if TRADING_V3_ENABLED and snapshot_updated:
+                persist_market_snapshot(
+                    market_data,
+                    market_context,
+                    market_open=True,
+                )
+
+            # Query open paper symbols once per market snapshot instead of
+            # once per each of ~279 symbols.
+            open_trade_symbols = get_open_trade_symbols() if TRADING_V3_ENABLED else set()
 
             # ==================================================
             # 🔁 MAIN LOOP
@@ -1209,12 +1242,13 @@ def scanner_loop():
                     try:
                         # Persist and update paper-trade lifecycle before evaluating
                         # fresh entries. Bot and channel positions are independent.
-                        for event in update_open_trades(symbol, price):
-                            event_msg = format_trade_event(event)
-                            if event.get("scope") == "INTRADAY":
-                                send_to_channel(event_msg)
-                            else:
-                                broadcast_signal(event_msg)
+                        if symbol in open_trade_symbols:
+                            for event in update_open_trades(symbol, price):
+                                event_msg = format_trade_event(event)
+                                if event.get("scope") == "INTRADAY":
+                                    send_to_channel(event_msg)
+                                else:
+                                    broadcast_signal(event_msg)
 
                         position_signals = evaluate_position_signals(
                             item, market_context, kap_cache=kap_cache
