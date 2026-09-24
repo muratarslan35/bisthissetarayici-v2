@@ -1,0 +1,20 @@
+[Unit]
+Description=BIST Trading Resource Isolation Slice
+
+[Slice]
+CPUAccounting=true
+MemoryAccounting=true
+IOAccounting=true
+
+# BIST must never monopolize the shared host. 80% means at most 0.8 CPU core
+# across BIST web + worker, leaving CPU headroom for IMS even on a 1-vCPU host.
+CPUQuota=80%
+CPUWeight=10
+
+# Hard host-wide memory boundary for all BIST services combined.
+MemoryHigh=30%
+MemoryMax=40%
+MemorySwapMax=5%
+
+# Yield disk bandwidth to IMS imports/snapshots under contention.
+IOWeight=10
