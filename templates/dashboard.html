@@ -17,7 +17,7 @@ body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,
 .brand h1{margin:0;font-size:22px;letter-spacing:.2px}
 .brand p{margin:5px 0 0;color:var(--muted);font-size:12px}
 .header-right{text-align:right;font-size:12px;color:var(--muted)}
-.status-grid{display:grid;grid-template-columns:repeat(6,minmax(130px,1fr));gap:10px;margin-bottom:14px}
+.status-grid{display:grid;grid-template-columns:repeat(7,minmax(130px,1fr));gap:10px;margin-bottom:14px}
 .status-card,.kpi,.panel{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--border);border-radius:14px}
 .status-card{padding:12px 14px}
 .status-label{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted)}
@@ -84,6 +84,7 @@ th,td{padding:10px 8px;border-bottom:1px solid #172334;white-space:nowrap}
     <div class="status-card"><div class="status-label">Intraday Breadth</div><div id="breadth" class="status-value">-</div></div>
     <div class="status-card"><div class="status-label">Evren</div><div id="universe" class="status-value">-</div></div>
     <div class="status-card"><div class="status-label">Veri</div><div id="source" class="status-value">-</div></div>
+    <div class="status-card"><div class="status-label">KAP</div><div id="kap-status" class="status-value">-</div></div>
   </div>
 
   <div class="kpis">
@@ -99,6 +100,7 @@ th,td{padding:10px 8px;border-bottom:1px solid #172334;white-space:nowrap}
     <button class="tab" data-tab="intraday">Kanal / Günlük Trade</button>
     <button class="tab" data-tab="performance">Algoritma Performansı</button>
     <button class="tab" data-tab="closed">Kapanan İşlemler</button>
+    <button class="tab" data-tab="kap">KAP Sağlık</button>
   </div>
 
   <section id="view-overview">
@@ -145,6 +147,27 @@ th,td{padding:10px 8px;border-bottom:1px solid #172334;white-space:nowrap}
         <table>
           <thead><tr><th>Hisse</th><th>Scope</th><th>Algoritma</th><th>Giriş</th><th>Çıkış</th><th>Sonuç</th><th>MFE</th><th>MAE</th><th>Neden</th><th>Kapanış</th></tr></thead>
           <tbody id="closed-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-kap" class="hidden">
+    <div class="panel">
+      <div class="panel-title"><h2>KAP Kaynak Sağlığı</h2><span>resmi kaynaklar · doğrulama · reconciliation</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Kaynak</th><th>Durum</th><th>Son Başarı</th><th>HTTP</th><th>Latency</th><th>Kayıt</th><th>Doğrulanan</th><th>Hata Serisi</th></tr></thead>
+          <tbody id="kap-source-body"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><h2>Son Doğrulanmış KAP Bildirimleri</h2><span>resmi KAP id ve link ile</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>ID</th><th>Hisse</th><th>Konu</th><th>Skor</th><th>RSS</th><th>HTML</th><th>Zaman</th></tr></thead>
+          <tbody id="kap-event-body"></tbody>
         </table>
       </div>
     </div>
@@ -227,6 +250,22 @@ function renderClosed(rows){
   <td>${pct(r.mfe_pct)}</td><td>${pct(r.mae_pct)}</td><td>${esc(r.exit_reason)}</td><td>${timeShort(r.closed_at)}</td></tr>`).join("")
   :'<tr><td colspan="10" class="empty">Kapanan paper trade yok.</td></tr>';
 }
+
+function renderKap(kap){
+  const sources=kap?.sources||[];
+  document.getElementById("kap-source-body").innerHTML=sources.length?sources.map(r=>`
+    <tr><td><b>${esc(r.source)}</b></td><td>${esc(r.status)}</td><td>${timeShort(r.last_success)}</td>
+    <td>${esc(r.http_status??"-")}</td><td>${n(r.latency_ms,0)} ms</td><td>${esc(r.entry_count??0)}</td>
+    <td>${esc(r.verified_count??0)}</td><td>${esc(r.consecutive_failures??0)}</td></tr>`).join("")
+    :'<tr><td colspan="8" class="empty">KAP kaynak health kaydı henüz oluşmadı.</td></tr>';
+
+  const events=kap?.recent||[];
+  document.getElementById("kap-event-body").innerHTML=events.length?events.map(r=>`
+    <tr><td>${esc(r.kap_id)}</td><td><b>${esc(r.symbol)}</b></td><td>${esc(r.title)}</td>
+    <td>${esc(r.score)}</td><td>${r.rss_seen?"✓":"-"}</td><td>${r.html_seen?"✓":"-"}</td>
+    <td>${timeShort(r.event_time)}</td></tr>`).join("")
+    :'<tr><td colspan="7" class="empty">Doğrulanmış KAP kaydı henüz yok.</td></tr>';
+}
 function render(data){
   state.data=data;
   const rt=data.runtime||{};
@@ -243,6 +282,11 @@ function render(data){
   document.getElementById("breadth").textContent=rt.breadth_intraday!=null?Math.round(rt.breadth_intraday*100)+"%":"-";
   document.getElementById("universe").textContent=rt.universe_size||0;
   document.getElementById("source").textContent=rt.data_source||"-";
+
+  const kap=data.kap||{};
+  const ks=document.getElementById("kap-status");
+  ks.textContent=(kap.overall||"UNKNOWN").toUpperCase()+" · "+(kap.verified_events_24h||0);
+  ks.className="status-value "+(kap.overall==="healthy"?"good":kap.overall==="degraded"?"warn":"bad");
 
   const posOpen=activeOnly(data.position_signals);
   const intraOpen=activeOnly(data.intraday_signals);
@@ -261,6 +305,7 @@ function render(data){
   renderCards("intraday-signals",data.intraday_signals,"INTRADAY");
   renderPerformance(data.performance);
   renderClosed(data.recent_closed);
+  renderKap(data.kap);
 }
 async function load(){
   try{
