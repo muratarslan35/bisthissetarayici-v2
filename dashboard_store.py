@@ -53,7 +53,6 @@ def init_dashboard_store():
 
 
 def update_worker_heartbeat(market_open=None):
-    init_dashboard_store()
     now = _now().isoformat()
     conn = get_connection()
     cur = conn.cursor()
@@ -81,7 +80,6 @@ def update_worker_heartbeat(market_open=None):
 
 
 def persist_market_snapshot(market_data, context, market_open):
-    init_dashboard_store()
     now = _now().isoformat()
 
     source = None
@@ -335,7 +333,6 @@ def _recent_closed(cur, limit=40):
 
 
 def get_dashboard_data():
-    init_dashboard_store()
     conn = get_connection()
     cur = conn.cursor()
 
