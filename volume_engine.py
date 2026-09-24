@@ -11,7 +11,8 @@ MIN_TICKS = 30
 WINDOW_SECONDS = 60
 MAX_TICKS = 600
 SAVE_INTERVAL = 15
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))\nCACHE_FILE = os.path.join(BASE_DIR, "data", "volume_cache.json")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CACHE_FILE = os.path.join(BASE_DIR, "data", "volume_cache.json")
 
 # ======================================================
 # GLOBAL
