@@ -152,3 +152,134 @@ SQLite is configured with WAL and a busy timeout so the read-heavy web process c
 coexist with scanner writes. The worker persists only refreshed market snapshots and
 processes the full universe only when a new snapshot or fresh KAP event exists.
 
+
+
+## KAP Ingestion V3
+
+KAP data is ingested once through a central verified service. Trading logic and
+restriction filters do not maintain separate social-media/RSS readers.
+
+### Current free source
+
+The former `/tr/rss/all` endpoint returns HTTP 404 on the current KAP site and is not
+used.
+
+Primary discovery uses the public JSON backend used by the KAP web application:
+
+```text
+POST https://www.kap.org.tr/tr/api/disclosure/members/byCriteria
+```
+
+Two member groups are queried:
+- `IGS` — listed-company disclosures, primary trading source.
+- `DDK` — regulatory/market disclosures, lower-frequency source used by restriction
+  workflows such as brüt-takas monitoring.
+
+The project does **not** depend on KAP's separate subscriber data-dissemination product.
+Third-party Twitter/Nitter feeds are not accepted as trade-event sources.
+
+### Structured parsing
+
+The list API returns structured fields such as:
+- `disclosureIndex`
+- `publishDate`
+- `kapTitle`
+- `subject`
+- `summary`
+- `stockCodes`
+- `relatedStocks`
+- disclosure class/type/category
+
+Symbol mapping and publication time therefore come from JSON fields rather than title
+string slicing or a brittle HTML table parser.
+
+### Second-level verification
+
+New trade-relevant disclosures can be reconciled through:
+
+```text
+GET /tr/api/notification/attachment-detail/<disclosureIndex>
+```
+
+If that endpoint is temporarily unavailable, the official
+`/tr/Bildirim/<disclosureIndex>` page is a last-resort verification layer.
+
+A detail failure does not invent or create an event: only an event discovered through
+the official list API can enter `kap_events`.
+
+### Verification and dedupe
+
+A disclosure is accepted only when:
+- the response remains on `kap.org.tr`,
+- a numeric `disclosureIndex` exists,
+- `publishDate` parses to an authoritative timestamp,
+- at least one structured stock code maps to the configured BIST universe.
+
+The durable key is `<disclosureIndex>:<symbol>`.
+
+All accepted events are stored in `kap_events`; source health is stored in
+`kap_source_health`.
+
+### Freshness by strategy
+
+- **INTRADAY / channel:** verified KAP event must be no more than 30 minutes old.
+- **POSITION / bot:** verified after-close events may remain eligible into the next
+  trading session (up to 18 hours).
+
+The worker monitors KAP even while the equity market is closed, so an after-hours filing
+is not lost.
+
+### Request discipline
+
+- IGS: about once per minute during active hours.
+- DDK: about once every five minutes.
+- Off-hours IGS cadence is reduced.
+- failures trigger exponential backoff.
+- process startup queries today and yesterday separately once, preventing after-close
+  data loss after a restart while avoiding oversized multi-day responses.
+
+### Health and observability
+
+The dashboard exposes:
+- overall KAP health,
+- `KAP_API_IGS` / `KAP_API_DDK` status,
+- detail API / HTML fallback status when used,
+- last successful request,
+- HTTP status and latency,
+- parsed and verified counts,
+- consecutive failures,
+- verified events in the last 24 hours,
+- recent KAP IDs and detail-verification state.
+
+`/health` exposes aggregate KAP status without disclosure contents.
+
+### Brüt-takas integration
+
+Brüt-takas logic consumes KAP IDs already verified by the central KAP service and no
+longer owns a second feed reader.
+
+Restriction extraction uses a deterministic parser first. Gemini can enrich/fallback,
+but AI is not the sole basis for a restriction flag.
+
+### Runtime flow
+
+```text
+KAP public JSON API
+  IGS 60s / DDK 5m
+         |
+         v
+schema + host validation
+         |
+         v
+disclosureIndex + publishDate + stockCodes
+         |
+         +------> kap_events (audit / dedupe)
+         |
+         +------> optional detail API verification
+         |
+         +------> recent verified cache
+                      |
+             +--------+--------+
+             |                 |
+      POSITION engine     INTRADAY engine
+```
