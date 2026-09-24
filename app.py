@@ -40,6 +40,11 @@ from trade_ledger import (
     update_open_trades,
     format_trade_event,
 )
+from dashboard_store import (
+    init_dashboard_store,
+    update_worker_heartbeat,
+    persist_market_snapshot,
+)
 from signal_engine import (
     process_symbol_signals,
     update_success_targets,
@@ -122,6 +127,7 @@ app.register_blueprint(dashboard_bp)
 
 init_db()
 init_trade_ledger()
+init_dashboard_store()
 
 # ======================================================
 # GLOBAL TRADE TRACK
@@ -621,7 +627,7 @@ def security():
     if request.path in ("/login", "/register"):
         return
 
-    if request.path.startswith("/api/dashboard") or request.path == "/health":
+    if request.path == "/health":
         return
 
     if request.path.startswith(f"/{ADMIN_PANEL_PATH}") or request.path.startswith("/admin"):
@@ -969,7 +975,7 @@ def scanner_loop():
     send_startup_message()
     
     last_fetch_time = 0
-    FETCH_INTERVAL = 5
+    FETCH_INTERVAL = 60 if TRADING_V3_ENABLED else 5
     last_market_data = []
     kap_cache = {}
     last_kap_check = 0
@@ -990,6 +996,7 @@ def scanner_loop():
         reset_weekly_success_if_needed()
 
         dashboard.SYSTEM_ACTIVE = False
+        update_worker_heartbeat(market_open=is_market_open(now))
 
         try:
 
@@ -1161,6 +1168,13 @@ def scanner_loop():
                 if TRADING_V3_ENABLED
                 else None
             )
+
+            if TRADING_V3_ENABLED:
+                persist_market_snapshot(
+                    market_data,
+                    market_context,
+                    market_open=True,
+                )
 
             # ==================================================
             # 🔁 MAIN LOOP
