@@ -34,11 +34,23 @@ jobs:
           BIST_DEPLOY_SSH_KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
         run: |
           set -Eeuo pipefail
-          test -n "$BIST_HOST"
-          test -n "$BIST_PORT"
-          test -n "$BIST_USER"
-          test -n "$BIST_PATH"
-          test -n "$BIST_DEPLOY_SSH_KEY"
+          missing=0
+          for name in BIST_HOST BIST_PORT BIST_USER BIST_PATH; do
+            value="${!name:-}"
+            if [ -z "$value" ]; then
+              echo "MISSING_CONFIG|$name"
+              missing=1
+            else
+              echo "CONFIG_OK|$name"
+            fi
+          done
+          if [ -z "$BIST_DEPLOY_SSH_KEY" ]; then
+            echo "MISSING_CONFIG|BIST_DEPLOY_SSH_KEY"
+            missing=1
+          else
+            echo "CONFIG_OK|BIST_DEPLOY_SSH_KEY"
+          fi
+          test "$missing" = "0"
 
       - name: Configure SSH
         shell: bash
