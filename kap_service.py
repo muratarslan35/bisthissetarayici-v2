@@ -229,7 +229,6 @@ def init_kap_store():
 
 
 def _source_health(source, ok, status, latency_ms, entry_count, verified_count, error=None, http_status=None):
-    init_kap_store()
     now = _now().isoformat()
 
     conn = get_connection()
@@ -279,8 +278,6 @@ def _source_health(source, ok, status, latency_ms, entry_count, verified_count, 
 
 
 def _upsert_event(event, source):
-    init_kap_store()
-
     event_key = f"{event['kap_id']}:{event['symbol']}"
     now = _now().isoformat()
     source_flags = {
@@ -411,16 +408,17 @@ def fetch_rss_events(fallback_symbols):
                 or entry.get("description")
                 or entry.get("content")
             )
-            events.extend(
-                _build_events(
-                    kap_id=kap_id,
-                    title=title,
-                    summary=summary,
-                    link=link,
-                    event_time=_entry_time(entry),
-                    allowed=allowed,
-                )
+            row_events = _build_events(
+                kap_id=kap_id,
+                title=title,
+                summary=summary,
+                link=link,
+                event_time=_entry_time(entry),
+                allowed=allowed,
             )
+            for event in row_events:
+                event["time_verified"] = True
+            events.extend(row_events)
 
         _source_health(
             source,
@@ -449,29 +447,35 @@ def fetch_rss_events(fallback_symbols):
 
 def _parse_html_event_time(cells):
     if not cells:
-        return _now()
+        return None
 
-    candidate = " ".join(cells[:2])
-    normalized = candidate.strip()
+    normalized = " ".join(cells[:5]).strip()
+    low = normalized.lower()
 
-    for fmt in ("%d.%m.%Y %H:%M", "%d-%m-%Y %H:%M"):
-        match = re.search(r"(\d{2}[.-]\d{2}[.-]\d{4}\s+\d{2}:\d{2})", normalized)
-        if match:
-            try:
-                return datetime.strptime(match.group(1), fmt).replace(tzinfo=TR_TZ)
-            except Exception:
-                pass
-
-    tm = re.search(r"(\d{2}:\d{2})", normalized)
-    if tm and ("bugün" in normalized.lower() or "today" in normalized.lower()):
+    match = re.search(r"(\d{2}[.-]\d{2}[.-]\d{4})\s+(\d{2}:\d{2})", normalized)
+    if match:
+        raw = f"{match.group(1)} {match.group(2)}".replace("-", ".")
         try:
-            parsed_time = datetime.strptime(tm.group(1), "%H:%M").time()
-            return datetime.combine(_now().date(), parsed_time, tzinfo=TR_TZ)
+            return datetime.strptime(raw, "%d.%m.%Y %H:%M").replace(tzinfo=TR_TZ)
         except Exception:
             pass
 
-    return _now()
+    tm = re.search(r"(\d{2}:\d{2})", normalized)
+    if tm:
+        try:
+            parsed_time = datetime.strptime(tm.group(1), "%H:%M").time()
+            if "bugün" in low or "today" in low:
+                return datetime.combine(_now().date(), parsed_time, tzinfo=TR_TZ)
+            if "dün" in low or "yesterday" in low:
+                return datetime.combine(
+                    (_now() - timedelta(days=1)).date(),
+                    parsed_time,
+                    tzinfo=TR_TZ,
+                )
+        except Exception:
+            pass
 
+    return None
 
 def fetch_html_events(fallback_symbols):
     source = "KAP_HTML"
@@ -512,18 +516,20 @@ def fetch_html_events(fallback_symbols):
             row_text = " | ".join(cells)
             title = cells[5] if len(cells) > 5 else row_text
             summary = cells[6] if len(cells) > 6 else row_text
-            event_time = _parse_html_event_time(cells)
+            parsed_event_time = _parse_html_event_time(cells)
+            event_time = parsed_event_time or _now()
 
-            events.extend(
-                _build_events(
-                    kap_id=kap_id,
-                    title=title,
-                    summary=summary + " " + row_text,
-                    link=link,
-                    event_time=event_time,
-                    allowed=allowed,
-                )
+            row_events = _build_events(
+                kap_id=kap_id,
+                title=title,
+                summary=summary + " " + row_text,
+                link=link,
+                event_time=event_time,
+                allowed=allowed,
             )
+            for event in row_events:
+                event["time_verified"] = parsed_event_time is not None
+            events.extend(row_events)
 
         # Some KAP versions embed links outside a literal <tr>. Count those too
         # for source-health validation even if row extraction cannot map symbols.
@@ -592,16 +598,17 @@ def fetch_api_events(fallback_symbols):
             link = f"https://www.kap.org.tr/tr/Bildirim/{kap_id}"
 
             event_time = _now()
-            events.extend(
-                _build_events(
-                    kap_id=kap_id,
-                    title=title,
-                    summary=f"{summary} {codes}",
-                    link=link,
-                    event_time=event_time,
-                    allowed=allowed,
-                )
+            row_events = _build_events(
+                kap_id=kap_id,
+                title=title,
+                summary=f"{summary} {codes}",
+                link=link,
+                event_time=event_time,
+                allowed=allowed,
             )
+            for event in row_events:
+                event["time_verified"] = False
+            events.extend(row_events)
 
         _source_health(
             source,
@@ -665,7 +672,17 @@ def poll_kap(fallback_symbols, force=False):
             continue
 
         seen.add(key)
-        if event.get("trade_relevant"):
+        if not event.get("trade_relevant"):
+            continue
+        if not event.get("time_verified"):
+            continue
+
+        try:
+            age_minutes = (_now() - event["event_time"]).total_seconds() / 60.0
+        except Exception:
+            continue
+
+        if -2 <= age_minutes <= 30:
             new_events.append(event)
 
     return new_events
