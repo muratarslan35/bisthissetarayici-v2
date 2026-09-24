@@ -1,0 +1,240 @@
+name: Migrate BIST To Dedicated VM
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/migrate-bist-dedicated.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: production
+    env:
+      SOURCE_HOST: 130.162.48.162
+      SOURCE_USER: ubuntu
+      SOURCE_PATH: /home/ubuntu/bistbot
+      TARGET_HOST: 89.168.99.141
+      TARGET_USER: ubuntu
+      TARGET_PATH: /home/ubuntu/bistbot
+      TARGET_KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
+      LEGACY_KEY: ${{ secrets.BIST_LEGACY_SSH_KEY || secrets.BIST_DEPLOY_SSH_KEY }}
+
+    steps:
+      - name: Checkout current BIST
+        uses: actions/checkout@v4
+
+      - name: Configure SSH keys
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$TARGET_KEY" > ~/.ssh/target_key
+          printf '%s\n' "$LEGACY_KEY" > ~/.ssh/legacy_key
+          chmod 600 ~/.ssh/target_key ~/.ssh/legacy_key
+          test -s ~/.ssh/target_key
+          test -s ~/.ssh/legacy_key
+
+      - name: Preflight dedicated target
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/target_key             -o BatchMode=yes -o IdentitiesOnly=yes             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null             -o ConnectTimeout=15 "$TARGET_USER@$TARGET_HOST" 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          echo "TARGET_SSH_OK"
+          test "$(id -un)" = "ubuntu"
+          sudo -n true
+
+          mem_kb=$(awk '/MemTotal:/ {print $2}' /proc/meminfo)
+          avail_kb=$(df -Pk / | awk 'NR==2 {print $4}')
+          test "$mem_kb" -ge 700000
+          test "$avail_kb" -ge 5000000
+
+          if systemctl list-unit-files --no-legend 2>/dev/null | grep -Eq '^ims-|ims-performance|ims-import|ims-report'; then
+            echo "Refusing migration: IMS service detected on dedicated BIST target" >&2
+            exit 1
+          fi
+          if [ -d /home/ubuntu/ims_system ] || [ -d /home/ubuntu/ims-performance-manager ]; then
+            echo "Refusing migration: IMS directory detected on dedicated BIST target" >&2
+            exit 1
+          fi
+
+          echo "TARGET_PREFLIGHT=PASS"
+          nproc
+          free -h
+          df -h /
+          REMOTE
+
+      - name: Preflight legacy source
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/legacy_key             -o BatchMode=yes -o IdentitiesOnly=yes             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null             -o ConnectTimeout=15 "$SOURCE_USER@$SOURCE_HOST" 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          echo "SOURCE_SSH_OK"
+          test -d /home/ubuntu/bistbot
+          test -f /home/ubuntu/bistbot/system.db
+          echo "SOURCE_PREFLIGHT=PASS"
+          du -sh /home/ubuntu/bistbot/data 2>/dev/null || true
+          ls -lh /home/ubuntu/bistbot/system.db 2>/dev/null || true
+          REMOTE
+
+      - name: Create source state package
+        run: |
+          set -Eeuo pipefail
+          remote_archive="/tmp/bist-state-${GITHUB_RUN_ID}.tgz"
+          ssh -i ~/.ssh/legacy_key             -o BatchMode=yes -o IdentitiesOnly=yes             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null             "$SOURCE_USER@$SOURCE_HOST" "bash -se" <<REMOTE
+          set -Eeuo pipefail
+          cd "$SOURCE_PATH"
+          files=()
+          for item in .env system.db data fallback_state.json successful_signals.json; do
+            [ -e "\$item" ] && files+=("\$item")
+          done
+          test "\${#files[@]}" -gt 0
+          tar -czf "$remote_archive" "\${files[@]}"
+          chmod 600 "$remote_archive"
+          echo "STATE_PACKAGE_READY"
+          ls -lh "$remote_archive"
+          REMOTE
+
+          scp -i ~/.ssh/legacy_key             -o BatchMode=yes -o IdentitiesOnly=yes             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null             "$SOURCE_USER@$SOURCE_HOST:$remote_archive" /tmp/bist-state.tgz
+
+          test -s /tmp/bist-state.tgz
+          chmod 600 /tmp/bist-state.tgz
+
+      - name: Bootstrap dedicated target
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/target_key             -o BatchMode=yes -o IdentitiesOnly=yes             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null             "$TARGET_USER@$TARGET_HOST" 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+
+          sudo apt-get update -y
+          sudo apt-get install -y git curl python3 python3-venv python3-pip build-essential
+
+          if ! swapon --show --noheadings | grep -q .; then
+            echo "Creating dedicated BIST swap"
+            sudo fallocate -l 2G /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile >/dev/null
+            sudo swapon /swapfile
+            grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+          fi
+
+          if [ ! -d /home/ubuntu/bistbot/.git ]; then
+            rm -rf /home/ubuntu/bistbot
+            git clone https://github.com/muratarslan35/bisthissetarayici-v2.git /home/ubuntu/bistbot
+          else
+            cd /home/ubuntu/bistbot
+            git fetch --prune origin
+            git reset --hard origin/main
+            git clean -fd -e .env -e system.db -e data/ -e fallback_state.json -e successful_signals.json
+          fi
+
+          cd /home/ubuntu/bistbot
+          python3 -m venv venv
+          venv/bin/python -m pip install --upgrade pip setuptools wheel
+          venv/bin/pip install -r requirements.txt
+          venv/bin/python -m compileall -q .
+          echo "TARGET_BOOTSTRAP=PASS"
+          REMOTE
+
+      - name: Transfer persistent state to target
+        run: |
+          set -Eeuo pipefail
+          scp -i ~/.ssh/target_key             -o BatchMode=yes -o IdentitiesOnly=yes             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null             /tmp/bist-state.tgz "$TARGET_USER@$TARGET_HOST:/tmp/bist-state.tgz"
+
+          ssh -i ~/.ssh/target_key             -o BatchMode=yes -o IdentitiesOnly=yes             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null             "$TARGET_USER@$TARGET_HOST" 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          cd /home/ubuntu/bistbot
+
+          sudo systemctl stop bist-trading-web.service bist-trading-worker.service 2>/dev/null || true
+
+          backup="/home/ubuntu/bist-target-pre-migration-backup.tgz"
+          existing=()
+          for item in .env system.db data fallback_state.json successful_signals.json; do
+            [ -e "$item" ] && existing+=("$item")
+          done
+          if [ "${#existing[@]}" -gt 0 ]; then
+            tar -czf "$backup" "${existing[@]}" || true
+            chmod 600 "$backup" || true
+          fi
+
+          tar -xzf /tmp/bist-state.tgz -C /home/ubuntu/bistbot
+          rm -f /tmp/bist-state.tgz
+          chown -R ubuntu:ubuntu /home/ubuntu/bistbot
+
+          test -f system.db
+          test -f .env
+          echo "STATE_RESTORE=PASS"
+          REMOTE
+
+      - name: Install and start dedicated BIST services
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/target_key             -o BatchMode=yes -o IdentitiesOnly=yes             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null             "$TARGET_USER@$TARGET_HOST" 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          cd /home/ubuntu/bistbot
+          bash deploy/install_dedicated_vm_services.sh /home/ubuntu/bistbot
+
+          test "$(sudo systemctl is-active bist-trading-web.service)" = "active"
+          test "$(sudo systemctl is-active bist-trading-worker.service)" = "active"
+
+          curl --fail --silent --show-error http://127.0.0.1:5000/health >/tmp/bist-health.json
+          python3 - <<'PY'
+          import json
+          with open('/tmp/bist-health.json', encoding='utf-8') as f:
+              data = json.load(f)
+          print("TARGET_HEALTH=PASS", data.get("status"), data.get("kap_status"))
+          PY
+
+          echo "TARGET_COMMIT=$(git rev-parse HEAD)"
+          echo "TARGET_SERVICES=PASS"
+          free -h
+          df -h /
+          sudo systemctl --no-pager --full status bist-trading-web.service | head -25
+          sudo systemctl --no-pager --full status bist-trading-worker.service | head -25
+          REMOTE
+
+      - name: Retire legacy BIST runtime only after target passes
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/legacy_key             -o BatchMode=yes -o IdentitiesOnly=yes             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null             "$SOURCE_USER@$SOURCE_HOST" 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          BIST=/home/ubuntu/bistbot
+
+          if ps -eo pid=,cmd= | grep -F "$BIST" | grep -v grep >/dev/null; then
+            echo "Refusing legacy cleanup: BIST process still running" >&2
+            exit 1
+          fi
+
+          # Preserve all persistent state for rollback; remove only disposable runtime weight.
+          rm -rf "$BIST/venv"
+          find "$BIST" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
+          for log in "$BIST/app.log" "$BIST/log.txt"; do
+            [ -f "$log" ] && gzip -f "$log" || true
+          done
+          printf '%s\n' 'Migrated to dedicated BIST VM 89.168.99.141' > "$BIST/MIGRATED_TO_DEDICATED_VM"
+
+          echo "LEGACY_BIST_RETIRED=PASS"
+          echo "Persistent rollback state preserved:"
+          ls -lh "$BIST/system.db" "$BIST/.env" 2>/dev/null || true
+          du -sh "$BIST/data" 2>/dev/null || true
+
+          echo "IMS read-only status:"
+          for svc in ims-performance-manager.service ims-import-worker.service ims-report-worker.service; do
+            if systemctl list-unit-files "$svc" --no-legend 2>/dev/null | grep -q "$svc"; then
+              echo "$svc=$(sudo systemctl is-active "$svc" || true)"
+            fi
+          done
+          REMOTE
+
+      - name: Cleanup runner and source archive
+        if: always()
+        run: |
+          rm -f /tmp/bist-state.tgz ~/.ssh/target_key ~/.ssh/legacy_key
+          if [ -n "${LEGACY_KEY:-}" ]; then
+            ssh -i /dev/null 127.0.0.1 true 2>/dev/null || true
+          fi
