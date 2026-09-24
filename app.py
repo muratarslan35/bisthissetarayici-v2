@@ -1,4 +1,5 @@
 import os
+import secrets
 import time
 import threading
 import json
@@ -124,7 +125,11 @@ REPORT_CHAT_IDS = [
 # ======================================================
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "super-secret-key")
+_app_env = os.getenv("APP_ENV", "development").lower()
+_secret_key = os.getenv("SECRET_KEY")
+if _app_env == "production" and not _secret_key:
+    raise RuntimeError("SECRET_KEY is required in production")
+app.secret_key = _secret_key or secrets.token_urlsafe(48)
 app.register_blueprint(dashboard_bp)
 
 init_db()
