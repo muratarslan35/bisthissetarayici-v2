@@ -28,7 +28,7 @@ def check_kap(fallback_symbols):
         event_time = event["event_time"]
         results[symbol] = {
             "kap_id": event["kap_id"],
-            "title": event["title"],
+            "title": event.get("subject") or event.get("company_title") or "KAP Bildirimi",
             "summary": event.get("summary"),
             "link": event["link"],
             # Legacy consumers expect a local naive datetime.
@@ -36,7 +36,8 @@ def check_kap(fallback_symbols):
             "published_at": event_time.isoformat(),
             "score": event.get("score", 0),
             "verified": True,
-            "source": "KAP_OFFICIAL",
+            "detail_verified": bool(event.get("detail_verified")),
+            "source": event.get("discovery_source") or "KAP_API",
             "alert_sent": False,
         }
 
