@@ -152,3 +152,84 @@ SQLite is configured with WAL and a busy timeout so the read-heavy web process c
 coexist with scanner writes. The worker persists only refreshed market snapshots and
 processes the full universe only when a new snapshot or fresh KAP event exists.
 
+
+
+## KAP Ingestion V3
+
+KAP data is ingested once through a central verified service. Trading logic and
+restriction filters do not maintain separate social-media/RSS readers.
+
+### Free-source priority
+
+1. **Official KAP RSS** — primary low-latency free source, polled about once per minute.
+2. **Official KAP public disclosure-query HTML** — reconciliation every 30 minutes,
+   or 5-minute failover when RSS health fails.
+3. **KAP REST dissemination API** — disabled by default because KAP documents it as
+   a subscriber data-dissemination integration. It can be explicitly enabled with
+   `KAP_API_ENABLED=1` when legitimate service access exists.
+
+Third-party Twitter/Nitter feeds are not accepted as trade-event sources.
+
+### Verification
+
+A disclosure becomes a verified KAP event only when:
+- the source resolves to `kap.org.tr` / a KAP subdomain,
+- a numeric KAP disclosure ID is extracted,
+- the link is an official `/Bildirim/<id>` link,
+- at least one symbol maps to the configured BIST universe.
+
+All verified events are stored in `kap_events`. Source health is stored in
+`kap_source_health`.
+
+Only trade-relevant events with a verified publication timestamp and age <= 30 minutes
+can become intraday KAP candidates. Reconciliation rows with uncertain timestamps are
+audit-only and cannot masquerade as fresh signals.
+
+Position signals can use a verified after-close KAP event into the next trading session;
+intraday KAP momentum requires a much fresher event.
+
+### Health and observability
+
+The dashboard exposes:
+- KAP overall health,
+- per-source last success / HTTP status / latency,
+- parsed and verified counts,
+- consecutive failures,
+- verified events in the last 24 hours,
+- recent KAP IDs and whether RSS/HTML reconciliation saw them.
+
+`/health` exposes aggregate KAP status without disclosure details.
+
+### Brüt-takas integration
+
+Brüt-takas logic consumes KAP IDs already verified by the central KAP service.
+It does not run its own independent KAP feed reader.
+
+Restriction extraction uses a deterministic parser first. Gemini may enrich/fallback,
+but AI is not the sole basis for the restriction flag.
+
+### Runtime cadence
+
+```text
+KAP RSS (60s)
+      |
+      v
+official-source validation
+      |
+      v
+KAP ID + symbol parser
+      |
+      +------> kap_events (audit/dedupe)
+      |
+      +------> fresh event cache
+                   |
+          +--------+--------+
+          |                 |
+   POSITION engine     INTRADAY engine
+
+KAP public HTML
+  30m reconciliation
+  5m RSS-failover
+      |
+      +------> confirms/mends kap_events
+```
