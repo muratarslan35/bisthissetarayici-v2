@@ -1,0 +1,134 @@
+name: BIST Server Audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bist-server-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Read-only BIST host audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+
+    env:
+      BIST_HOST: ${{ vars.BIST_SERVER_HOST }}
+      BIST_PORT: ${{ vars.BIST_SERVER_PORT || '22' }}
+      BIST_USER: ${{ vars.BIST_SERVER_USER || 'ubuntu' }}
+      BIST_PATH: ${{ vars.BIST_DEPLOY_PATH }}
+
+    steps:
+      - name: Validate connection configuration
+        shell: bash
+        env:
+          BIST_DEPLOY_SSH_KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$BIST_HOST"
+          test -n "$BIST_PORT"
+          test -n "$BIST_USER"
+          test -n "$BIST_PATH"
+          test -n "$BIST_DEPLOY_SSH_KEY"
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          BIST_DEPLOY_SSH_KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$BIST_DEPLOY_SSH_KEY" > ~/.ssh/bist_deploy_key
+          chmod 600 ~/.ssh/bist_deploy_key
+          ssh-keyscan -p "$BIST_PORT" -H "$BIST_HOST" >> ~/.ssh/known_hosts
+
+      - name: Read-only host and service audit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/bist_deploy_key -p "$BIST_PORT" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ConnectionAttempts=3 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=10 \
+            "$BIST_USER@$BIST_HOST" \
+            "BIST_PATH='$BIST_PATH' bash -se" <<'REMOTE'
+          set -Eeuo pipefail
+
+          echo '=== HOST ==='
+          hostname
+          uname -a
+          echo "cpu_count=$(nproc)"
+          free -h
+          df -h /
+          uptime
+
+          echo
+          echo '=== BIST REPOSITORY ==='
+          test -d "$BIST_PATH"
+          cd "$BIST_PATH"
+          echo "cwd=$(pwd)"
+          echo "branch=$(git branch --show-current 2>/dev/null || true)"
+          echo "head=$(git rev-parse HEAD 2>/dev/null || true)"
+          echo 'git_status_begin'
+          git status --short 2>/dev/null || true
+          echo 'git_status_end'
+
+          echo
+          echo '=== PORTS ==='
+          ss -ltnp 2>/dev/null | grep -E ':(5000|8000)[[:space:]]' || true
+
+          echo
+          echo '=== BIST SERVICES ==='
+          for svc in bist-trading-web.service bist-trading-worker.service bist-trading.slice; do
+            echo "--- $svc ---"
+            systemctl is-active "$svc" 2>/dev/null || true
+            systemctl show "$svc" \
+              -p LoadState \
+              -p ActiveState \
+              -p SubState \
+              -p MainPID \
+              -p Slice \
+              -p CPUQuotaPerSecUSec \
+              -p CPUWeight \
+              -p MemoryCurrent \
+              -p MemoryHigh \
+              -p MemoryMax \
+              -p MemorySwapMax \
+              -p IOWeight \
+              -p OOMScoreAdjust 2>/dev/null || true
+          done
+
+          echo
+          echo '=== IMS SERVICES (READ ONLY) ==='
+          for svc in ims-performance-manager.service ims-import-worker.service ims-report-worker.service; do
+            echo "--- $svc ---"
+            systemctl is-active "$svc" 2>/dev/null || true
+            systemctl show "$svc" \
+              -p LoadState \
+              -p ActiveState \
+              -p SubState \
+              -p MainPID \
+              -p CPUWeight \
+              -p MemoryCurrent \
+              -p MemoryHigh \
+              -p MemoryMax 2>/dev/null || true
+          done
+
+          echo
+          echo '=== TOP MEMORY ==='
+          ps -eo pid,user,comm,%cpu,%mem,rss,args --sort=-rss | head -20 || true
+
+          echo
+          echo '=== TOP CPU ==='
+          ps -eo pid,user,comm,%cpu,%mem,rss,args --sort=-%cpu | head -20 || true
+
+          echo
+          echo 'AUDIT_RESULT=PASS'
+          REMOTE
