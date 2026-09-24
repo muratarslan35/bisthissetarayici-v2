@@ -94,7 +94,7 @@ ENABLE_ULTRA_PRICE_ENGINE = os.getenv("ENABLE_ULTRA_PRICE_ENGINE", "0") == "1"
 
 TR_TZ = ZoneInfo("Europe/Istanbul")
 BIST_OPEN = dtime(9, 40)
-BIST_CLOSE = dtime(18, 5)
+BIST_CLOSE = dtime(18, 10)
 SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", "3"))
 
 # ======================================================
@@ -1132,7 +1132,7 @@ def scanner_loop():
                 time.sleep(60)
                 continue
 
-            market_data = market_data[:250]
+            # V3 ranks the complete configured universe; do not silently drop symbols.
 
             valid_count = 0
 
