@@ -61,7 +61,7 @@ from dashboard import (
     push_signal,
     push_success_signal
 )
-from kap_monitor import check_kap
+from kap_monitor import check_kap, load_recent_kap_cache, kap_health
 from kap_volume_signal import detect_kap_volume_momentum
 
 from utils import FALLBACK_SYMBOLS, get_last_resistance
@@ -717,9 +717,12 @@ def index():
 
 @app.route("/health")
 def health():
+    kap = kap_health()
     return jsonify({
         "market_open": is_market_open(),
-        "server_time": now_tr().strftime("%H:%M:%S")
+        "server_time": now_tr().strftime("%H:%M:%S"),
+        "kap_status": kap.get("overall"),
+        "kap_verified_events_24h": kap.get("verified_events_24h", 0),
     })
 
 # ======================================================
@@ -978,9 +981,9 @@ def scanner_loop():
     last_fetch_time = 0
     FETCH_INTERVAL = 60 if TRADING_V3_ENABLED else 5
     last_market_data = []
-    kap_cache = {}
+    kap_cache = load_recent_kap_cache(minutes=1080)
     last_kap_check = 0
-    KAP_INTERVAL = 25
+    KAP_INTERVAL = max(30, int(os.getenv("KAP_POLL_SECONDS", "45")))
 
     last_brut_report = None
     last_daily_report = None
@@ -1005,6 +1008,25 @@ def scanner_loop():
             last_heartbeat = time.time()
 
         try:
+
+            # --------------------------------------------------
+            # KAP - 7/24 OFFICIAL INGEST
+            # --------------------------------------------------
+            # KAP disclosures can arrive after the exchange close. Poll the
+            # official feed before the market-open branch so overnight events
+            # are persisted and available to the next session.
+            now_ts = time.time()
+            if now_ts - last_kap_check >= KAP_INTERVAL:
+                try:
+                    new_kaps = check_kap(ENGINE_SYMBOLS)
+                    if new_kaps:
+                        kap_cache.update(new_kaps)
+                        kap_changed = True
+                        if len(kap_cache) > 500:
+                            kap_cache = dict(list(kap_cache.items())[-300:])
+                except Exception as e:
+                    print("KAP official ingest error:", e, flush=True)
+                last_kap_check = time.time()
 
             # --------------------------------------------------
             # MARKET KAPALI
@@ -1083,40 +1105,16 @@ def scanner_loop():
                     print("BRUT REPORT ERROR:", e)
 
             # --------------------------------------------------
-            # KAP TARAMA
+            # BRÜT TAKAS KONTROL
             # --------------------------------------------------
-            now_ts = time.time()
-
-            if now_ts - last_kap_check > KAP_INTERVAL:
-
-                try:
-
-                    new_kaps = check_kap(ENGINE_SYMBOLS)
-
-                    if new_kaps:
-
-                        kap_cache.update(new_kaps)
-                        kap_changed = True
-
-                        if len(kap_cache) > 500:
-                            kap_cache = dict(list(kap_cache.items())[-200:])
-
-                except Exception as e:
-                    print("KAP tarama hatası:", e)
-
-                # 🔥 YENİ BRÜT TAKAS KONTROL
-                try:
-                    new_bruts = detect_new_bruts()
-
-                    if new_bruts and len(new_bruts) > 0:
-                        msg = build_new_message(new_bruts, now_tr())
-                        if msg:
-                            send_to_channel(msg)
-
-                except Exception as e:
-                    print("BRUT ERROR:", e)
-
-                last_kap_check = time.time()
+            try:
+                new_bruts = detect_new_bruts()
+                if new_bruts and len(new_bruts) > 0:
+                    msg = build_new_message(new_bruts, now_tr())
+                    if msg:
+                        send_to_channel(msg)
+            except Exception as e:
+                print("BRUT ERROR:", e)
 
             # --------------------------------------------------
             # MARKET DATA
