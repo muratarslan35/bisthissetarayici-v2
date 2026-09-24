@@ -772,8 +772,14 @@ def poll_kap(fallback_symbols, force=False):
             else:
                 event["detail_verified"] = False
 
-        # Immediate intraday event path only receives genuinely fresh records.
-        if event.get("trade_relevant") and -2 <= age_minutes <= 30:
+        # Trade engines only receive genuinely fresh events that were
+        # independently verified through KAP detail API or the official
+        # disclosure HTML page. A list-only event stays in the audit store.
+        if (
+            event.get("trade_relevant")
+            and event.get("detail_verified")
+            and -2 <= age_minutes <= 30
+        ):
             new_trade_events.append(event)
 
     return new_trade_events
@@ -881,6 +887,7 @@ def recent_kap_cache(minutes=30):
            score, detail_verified, discovery_source
     FROM kap_events
     WHERE verified = 1
+      AND detail_verified = 1
       AND trade_relevant = 1
       AND event_time >= ?
     ORDER BY event_time DESC
