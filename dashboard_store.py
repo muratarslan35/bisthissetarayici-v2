@@ -52,18 +52,30 @@ def init_dashboard_store():
     conn.close()
 
 
-def update_worker_heartbeat():
+def update_worker_heartbeat(market_open=None):
     init_dashboard_store()
     now = _now().isoformat()
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("""
-    INSERT INTO dashboard_runtime (id, worker_heartbeat, updated_at)
-    VALUES (1, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-        worker_heartbeat = excluded.worker_heartbeat,
-        updated_at = excluded.updated_at
-    """, (now, now))
+
+    if market_open is None:
+        cur.execute("""
+        INSERT INTO dashboard_runtime (id, worker_heartbeat, updated_at)
+        VALUES (1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            worker_heartbeat = excluded.worker_heartbeat,
+            updated_at = excluded.updated_at
+        """, (now, now))
+    else:
+        cur.execute("""
+        INSERT INTO dashboard_runtime (id, worker_heartbeat, market_open, updated_at)
+        VALUES (1, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            worker_heartbeat = excluded.worker_heartbeat,
+            market_open = excluded.market_open,
+            updated_at = excluded.updated_at
+        """, (now, 1 if market_open else 0, now))
+
     conn.commit()
     conn.close()
 
