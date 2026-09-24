@@ -1,0 +1,64 @@
+name: Inventory BIST Migration State
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/inventory-bist-state.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keyscan -H 130.162.48.162 >> ~/.ssh/known_hosts
+
+      - name: Inspect migration state without reading secrets
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/key -o BatchMode=yes ubuntu@130.162.48.162 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          cd /home/ubuntu/bistbot
+
+          echo '=== STATE FILES ==='
+          for item in .env system.db data fallback_state.json successful_signals.json; do
+            if [ -e "$item" ]; then
+              du -sh "$item"
+            else
+              echo "MISSING|$item"
+            fi
+          done
+
+          echo
+          echo '=== RUNTIME FOOTPRINT ==='
+          for item in venv __pycache__ app.log bot.log log.txt; do
+            if [ -e "$item" ]; then
+              du -sh "$item"
+            fi
+          done
+
+          echo
+          echo '=== DATA DIRECTORY ==='
+          find data -maxdepth 2 -type f -printf '%p|%s bytes\n' 2>/dev/null | sort | head -100 || true
+
+          echo
+          echo '=== ENV KEYS ONLY ==='
+          if [ -f .env ]; then
+            sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/ENV_KEY|\1/p' .env | sort -u
+          fi
+
+          echo 'MIGRATION_STATE_INVENTORY=PASS'
+          REMOTE
