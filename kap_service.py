@@ -738,6 +738,37 @@ def get_kap_health():
     }
 
 
+def get_recent_verified_events(hours=72, contains=None, limit=100):
+    init_kap_store()
+    cutoff = (_now() - timedelta(hours=hours)).isoformat()
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+    SELECT kap_id, symbol, title, summary, link, event_time, score,
+           trade_relevant, rss_seen, html_seen, api_seen
+    FROM kap_events
+    WHERE verified = 1
+      AND event_time >= ?
+    ORDER BY event_time DESC
+    LIMIT ?
+    """, (cutoff, int(limit)))
+
+    rows = [dict(row) for row in cur.fetchall()]
+    conn.close()
+
+    if contains:
+        needle = _normalize_text(contains)
+        rows = [
+            row for row in rows
+            if needle in _normalize_text(
+                f"{row.get('title', '')} {row.get('summary', '')}"
+            )
+        ]
+
+    return rows
+
+
 def recent_kap_cache(minutes=30):
     init_kap_store()
     cutoff = (_now() - timedelta(minutes=minutes)).isoformat()
