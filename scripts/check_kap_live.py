@@ -27,13 +27,13 @@ def main():
     }, ensure_ascii=False, indent=2, default=str))
 
     source_ok = any(
-        s.get("source") in {"KAP_RSS", "KAP_HTML"}
-        and s.get("status") in {"healthy", "reachable_no_rows"}
+        s.get("source") == "KAP_API_IGS"
+        and s.get("status") == "healthy"
         for s in health.get("sources") or []
     )
 
     if not source_ok:
-        print("No official KAP source validated.", file=sys.stderr)
+        print("KAP public company-disclosure API did not validate.", file=sys.stderr)
         return 2
 
     return 0
