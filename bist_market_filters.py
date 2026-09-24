@@ -260,11 +260,17 @@ def fetch_kap_html():
                 if "brüt" not in text.lower() and "brut" not in text.lower():
                     # Public detail HTML may be client-rendered; use the already
                     # verified KAP title/summary as a deterministic fallback.
-                    text = f"{event.get('title','')} {event.get('summary','')}"
+                    text = (
+                        f"{event.get('subject','')} "
+                        f"{event.get('summary','')} "
+                        f"{event.get('company_title','')}"
+                    )
 
+                # Trading restriction decisions are deterministic.
+                # Gemini may be used elsewhere for explanation/enrichment, but
+                # cannot create a brüt-takas flag on its own.
                 deterministic = deterministic_parse_brut(text)
-                ai = gemini_parse_brut(text) if client else {}
-                results.update(merge_all(deterministic, ai))
+                results.update(deterministic)
 
             except Exception as e:
                 print("KAP BRUT DETAIL ERROR:", e)
@@ -355,9 +361,6 @@ def fetch_pdf_brut():
         return results
 
     results.update(deterministic_parse_brut(text))
-    if client:
-        results.update(gemini_parse_brut(text))
-
     return results
 
 
@@ -392,10 +395,12 @@ def get_brut_list():
     print("🔍 BRÜT TARANIYOR...")
 
     kap = fetch_kap_html()
-    doviz = fetch_doviz_html()
     pdf = fetch_pdf_brut()
 
-    final = merge_all(kap, doviz, pdf)
+    # Critical restriction state must come from verified official KAP
+    # disclosures (or explicit manual admin override), never a third-party
+    # news page or AI-only extraction.
+    final = merge_all(kap, pdf)
 
     final = merge_manual(final)
     final = clean_expired(final)
