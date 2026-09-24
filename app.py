@@ -27,6 +27,19 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from database import init_db, get_connection
 
 from fetch_bist import fetch_bist_data
+from market_data_hub import fetch_market_snapshot
+from strategy_v3 import (
+    build_market_context,
+    evaluate_position_signals,
+    evaluate_intraday_signals,
+    format_v3_signal_message,
+)
+from trade_ledger import (
+    init_trade_ledger,
+    record_signal,
+    update_open_trades,
+    format_trade_event,
+)
 from signal_engine import (
     process_symbol_signals,
     update_success_targets,
@@ -68,7 +81,12 @@ ADMIN_PANEL_PATH = os.getenv("ADMIN_PANEL_PATH", "admin-hidden")
 # ======================================================
 # 🔥 ENGINE SYMBOLS (MERKEZİ)
 # ======================================================
-ENGINE_SYMBOLS = list(set(FALLBACK_SYMBOLS))
+# Keep universe order deterministic across restarts.
+ENGINE_SYMBOLS = list(dict.fromkeys(FALLBACK_SYMBOLS))
+
+TRADING_V3_ENABLED = os.getenv("TRADING_V3_ENABLED", "1") == "1"
+# Disabled by default in V3: automated TradingView polling is not required.
+ENABLE_ULTRA_PRICE_ENGINE = os.getenv("ENABLE_ULTRA_PRICE_ENGINE", "0") == "1"
 
 # ======================================================
 # TIME
@@ -76,7 +94,7 @@ ENGINE_SYMBOLS = list(set(FALLBACK_SYMBOLS))
 
 TR_TZ = ZoneInfo("Europe/Istanbul")
 BIST_OPEN = dtime(9, 40)
-BIST_CLOSE = dtime(18, 5)
+BIST_CLOSE = dtime(18, 10)
 SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", "3"))
 
 # ======================================================
@@ -103,6 +121,7 @@ app.secret_key = os.getenv("SECRET_KEY", "super-secret-key")
 app.register_blueprint(dashboard_bp)
 
 init_db()
+init_trade_ledger()
 
 # ======================================================
 # GLOBAL TRADE TRACK
@@ -1094,7 +1113,11 @@ def scanner_loop():
             # --------------------------------------------------
 
             if time.time() - last_fetch_time > FETCH_INTERVAL:
-                new_data = fetch_bist_data(ENGINE_SYMBOLS)
+                new_data = (
+                    fetch_market_snapshot(ENGINE_SYMBOLS)
+                    if TRADING_V3_ENABLED
+                    else fetch_bist_data(ENGINE_SYMBOLS)
+                )
                 if isinstance(new_data, list):
                     if len(new_data) > 0:
                         last_market_data = new_data
@@ -1109,7 +1132,7 @@ def scanner_loop():
                 time.sleep(60)
                 continue
 
-            market_data = market_data[:250]
+            # V3 ranks the complete configured universe; do not silently drop symbols.
 
             valid_count = 0
 
@@ -1132,6 +1155,13 @@ def scanner_loop():
                 time.sleep(60)
                 continue
 
+            # Build cross-sectional breadth/regime/ranking once per snapshot.
+            market_context = (
+                build_market_context(market_data)
+                if TRADING_V3_ENABLED
+                else None
+            )
+
             # ==================================================
             # 🔁 MAIN LOOP
             # ==================================================
@@ -1141,21 +1171,21 @@ def scanner_loop():
                 symbol = item.get("symbol")
                 price = item.get("current_price")
 
-                # 🔥 ENGINE PRICE FALLBACK
-                if not price or price == 0:
-                    price = get_price(symbol)
+                # V3 uses the centralized Yahoo batch snapshot by default.
+                # Optional ultra-price cache can be enabled explicitly, but is never
+                # required for strategy evaluation.
+                if not TRADING_V3_ENABLED or ENABLE_ULTRA_PRICE_ENGINE:
+                    if not price or price == 0:
+                        price = get_price(symbol)
 
-                # 🔥 .IS uyumsuzluğu için
-                if not price and symbol:
-                    clean_symbol = symbol.replace(".IS", "")
-                    price = get_price(clean_symbol)
+                    if not price and symbol:
+                        clean_symbol = symbol.replace(".IS", "")
+                        price = get_price(clean_symbol)
 
-                # 🔥 REALTIME PRICE FORCE
-                live_price = get_price(symbol)
-
-                if live_price is not None and live_price > 0:
-                    price = live_price
-                    item["current_price"] = price
+                    live_price = get_price(symbol)
+                    if live_price is not None and live_price > 0:
+                        price = live_price
+                        item["current_price"] = price
 
                 # ❌ hala yoksa skip
                 if not price:
@@ -1163,20 +1193,52 @@ def scanner_loop():
 
                 # 🔥 artık güvenli şekilde kullanabilirsin
                 item["current_price"] = price
-                item["timestamp"] = time.time()
-                update_tick(symbol, price)
-                rvol = get_rvol(symbol)
-                
 
-                if rvol is None:
-                    rvol = 0
-
-                item["rvol"] = rvol
-
+                # Legacy synthetic tick-RVOL is intentionally disabled in V3.
+                # It counted application polling events instead of traded volume.
+                if not TRADING_V3_ENABLED:
+                    item["timestamp"] = time.time()
+                    update_tick(symbol, price)
+                    rvol = get_rvol(symbol) or 0
+                    item["rvol"] = rvol
 
                 if symbol and isinstance(price, (int, float)):
                     dashboard.LIVE_PRICES[symbol] = price
 
+                if TRADING_V3_ENABLED:
+                    try:
+                        # Persist and update paper-trade lifecycle before evaluating
+                        # fresh entries. Bot and channel positions are independent.
+                        for event in update_open_trades(symbol, price):
+                            event_msg = format_trade_event(event)
+                            if event.get("scope") == "INTRADAY":
+                                send_to_channel(event_msg)
+                            else:
+                                broadcast_signal(event_msg)
+
+                        position_signals = evaluate_position_signals(
+                            item, market_context, kap_cache=kap_cache
+                        )
+                        intraday_signals = evaluate_intraday_signals(
+                            item, market_context, kap_cache=kap_cache
+                        )
+
+                        for sig in position_signals:
+                            if record_signal(sig):
+                                push_signal(sig)
+                                broadcast_signal(format_v3_signal_message(sig))
+
+                        for sig in intraday_signals:
+                            if record_signal(sig):
+                                push_signal(sig)
+                                send_to_channel(format_v3_signal_message(sig))
+
+                    except Exception as e:
+                        print(f"⚠ V3 {symbol} hata: {e}", flush=True)
+
+                    # V3 fully owns signal routing; never fall through to the
+                    # legacy KOMBINE/SUPER/SCALPING OR-chain.
+                    continue
 
                 try:
 
@@ -1482,20 +1544,16 @@ if __name__ == "__main__":
     # ==================================================
     # 🔥 ULTRA ENGINE START
     # ==================================================
-    print("🚀 ULTRA PRICE ENGINE STARTING...")
+    if ENABLE_ULTRA_PRICE_ENGINE:
+        print("🚀 OPTIONAL ULTRA PRICE ENGINE STARTING...")
+        start_engine(ENGINE_SYMBOLS)
 
-    start_engine(ENGINE_SYMBOLS)
-
-    # ==================================================
-    # 🔥 VOLUME ENGINE START
-    # ==================================================
-    print("📊 VOLUME ENGINE STARTING...")
-
-    load_volume_cache()
-    threading.Thread(target=save_volume_cache, daemon=True).start()
-   
-    # 🔥 RVOL BACKGROUND ENGINE
-    threading.Thread(target=rvol_updater, daemon=True).start()
+    # Legacy tick-volume threads are not used by V3.
+    if not TRADING_V3_ENABLED:
+        print("📊 LEGACY VOLUME ENGINE STARTING...")
+        load_volume_cache()
+        threading.Thread(target=save_volume_cache, daemon=True).start()
+        threading.Thread(target=rvol_updater, daemon=True).start()
 
     # ==================================================
     # 🔁 SCANNER START

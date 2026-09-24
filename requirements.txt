@@ -11,3 +11,6 @@ tzdata
 python-dotenv
 werkzeug
 python-telegram-bot
+google-genai
+pdfplumber
+pillow

@@ -23,7 +23,7 @@ def make_key(*parts):
 # PERSIST CONFIG (HAFTALIK + CUMA)
 # ======================================================
 
-DATA_DIR = "data"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))\nDATA_DIR = os.path.join(BASE_DIR, "data")
 
 DAILY_STATE_FILE = os.path.join(DATA_DIR, "daily_state.json")
 WEEKLY_STATE_FILE = os.path.join(DATA_DIR, "weekly_state.json")
@@ -271,6 +271,8 @@ HELPER_DESCRIPTIONS = {
     "3LÜ TEPE": "Zayıf yapı",
     "L2 KIRILIM": "Zayıf kırılım",
     "MOST KIRILIMI": "MOST aşağı – risk",
+    "1H DESTEK KIRILIMI": "Saatlik destek aşağı kırıldı – risk",
+    "4H DESTEK KIRILIMI": "4 saatlik destek aşağı kırıldı – yüksek risk",
     "L4 MAJÖR KIRILIM": "Kurumsal majör seviye kırılımı",
 }
 
@@ -304,6 +306,16 @@ def ema_trend(e20, e50, e200):
     if e20 < e50 < e200:
         return "📉 AŞAĞI"
     return "➖ YATAY"
+
+
+def is_true_golden_cross(df):
+    """Return True only on an actual EMA50 upward cross of EMA200."""
+    if df is None or len(df) < 205:
+        return False
+    close = df["Close"].astype(float)
+    e50 = close.ewm(span=50, adjust=False).mean()
+    e200 = close.ewm(span=200, adjust=False).mean()
+    return bool(e50.iloc[-2] <= e200.iloc[-2] and e50.iloc[-1] > e200.iloc[-1])
 
 # ======================================================
 # CANDLE HELPERS
@@ -594,7 +606,8 @@ def helper_indicators(item):
     df15 = tf15.get("df")
     if df15 is not None:
         if detect_three_peaks(df15["Close"]):
-            helpers.append(("3LÜ TEPE", 8))
+            # A multi-peak structure is a risk flag, not bullish confirmation.
+            helpers.append(("3LÜ TEPE", -8))
         if detect_order_block(df15):
             helpers.append(("ORDER BLOCK", 15))
 
@@ -624,12 +637,19 @@ def helper_indicators(item):
             )
         )
 
-    if tf1h and detect_support_resistance_break(tf1h["df"]):
-        helpers.append(("1H YAPISAL KIRILIM", 20))
+    if tf1h:
+        break_1h = detect_support_resistance_break(tf1h["df"])
+        if break_1h and break_1h.get("type") == "RESISTANCE_BREAK":
+            helpers.append(("1H YAPISAL KIRILIM", 20))
+        elif break_1h and break_1h.get("type") == "SUPPORT_BREAK":
+            helpers.append(("1H DESTEK KIRILIMI", -25))
 
     if tf4h:
-        if detect_support_resistance_break(tf4h["df"]):
+        break_4h = detect_support_resistance_break(tf4h["df"])
+        if break_4h and break_4h.get("type") == "RESISTANCE_BREAK":
             helpers.append(("4H TREND KIRILIMI", 25))
+        elif break_4h and break_4h.get("type") == "SUPPORT_BREAK":
+            helpers.append(("4H DESTEK KIRILIMI", -35))
         if detect_4h_squeeze_breakout(tf4h["df"]):
             helpers.append(("4H SIKIŞMA KIRILIMI (ONAYLI)", 30))
 
@@ -641,7 +661,7 @@ def helper_indicators(item):
         ):
             helpers.append(("ÇOKLU ZAMAN EMA ONAYI", 10))
 
-    if tf1d and tf1d.get("ema50") > tf1d.get("ema200"):
+    if tf1d and is_true_golden_cross(tf1d.get("df")):
         helpers.append(("GOLDEN CROSS", 10))
 
     if tf4h:

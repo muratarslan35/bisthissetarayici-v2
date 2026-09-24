@@ -21,7 +21,7 @@ SAVE_INTERVAL = 15
 MAX_KEEP_SECONDS = 300
 CLEANUP_INTERVAL = 30
 
-CACHE_FILE = "data/price_cache.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))\nCACHE_FILE = os.path.join(BASE_DIR, "data", "price_cache.json")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -74,7 +74,7 @@ def load_cache():
 def save_cache():
     while RUNNING:
         try:
-            os.makedirs("data", exist_ok=True)
+            os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
 
             now = time.time()
 

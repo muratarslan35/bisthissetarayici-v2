@@ -59,7 +59,10 @@ def reset_dashboard_if_needed(now):
 # ======================================================
 
 def push_signal(signal):
-    if signal.get("main_algorithm") == "SCALPING":
+    if (
+        signal.get("signal_scope") == "INTRADAY"
+        or signal.get("main_algorithm") == "SCALPING"
+    ):
         SCALPING_SIGNALS.insert(0, signal)
         del SCALPING_SIGNALS[MAX_SCALPING_SIGNALS:]
     else:
