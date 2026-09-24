@@ -27,7 +27,9 @@ jobs:
           python -m compileall -q .
 
       - name: Validate deployment scripts
-        run: bash -n deploy/install_shared_host_services.sh
+        run: |
+          bash -n deploy/install_shared_host_services.sh
+          bash -n scripts/check_shared_host_isolation.sh
 
       - name: Run tests
         run: python -m unittest discover -s tests -v
