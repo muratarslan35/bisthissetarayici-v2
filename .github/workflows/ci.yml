@@ -1,0 +1,30 @@
+name: BIST V3 CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, "feat/**"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile critical modules
+        run: |
+          python -m py_compile market_data_hub.py strategy_v3.py trade_ledger.py worker.py app.py
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
