@@ -22,7 +22,7 @@ jobs:
     environment: production
 
     env:
-      BIST_HOST: 89.168.99.147
+      BIST_HOST: ${{ vars.BIST_SERVER_HOST }}
       BIST_PORT: ${{ vars.BIST_SERVER_PORT || '22' }}
       BIST_USER: ${{ vars.BIST_SERVER_USER || 'ubuntu' }}
       BIST_PATH: ${{ vars.BIST_DEPLOY_PATH }}
