@@ -985,10 +985,13 @@ def scanner_loop():
     last_daily_report = None
     last_weekly_report = None
     last_momentum_reset = None
+    last_heartbeat = 0
 
     while True:
 
         now = now_tr()
+        snapshot_updated = False
+        kap_changed = False
 
         print(f"\n⏱ Döngü: {now.strftime('%H:%M:%S')}", flush=True)
 
@@ -996,7 +999,9 @@ def scanner_loop():
         reset_weekly_success_if_needed()
 
         dashboard.SYSTEM_ACTIVE = False
-        update_worker_heartbeat(market_open=is_market_open(now))
+        if time.time() - last_heartbeat >= 30:
+            update_worker_heartbeat(market_open=is_market_open(now))
+            last_heartbeat = time.time()
 
         try:
 
@@ -1090,6 +1095,7 @@ def scanner_loop():
                     if new_kaps:
 
                         kap_cache.update(new_kaps)
+                        kap_changed = True
 
                         if len(kap_cache) > 500:
                             kap_cache = dict(list(kap_cache.items())[-200:])
@@ -1128,6 +1134,7 @@ def scanner_loop():
                 if isinstance(new_data, list):
                     if len(new_data) > 0:
                         last_market_data = new_data
+                        snapshot_updated = True
                     else:
                         print("⚠ boş veri geldi, eski veri korunuyor")
                 last_fetch_time = time.time()
@@ -1162,6 +1169,13 @@ def scanner_loop():
                 time.sleep(60)
                 continue
 
+            if TRADING_V3_ENABLED and not snapshot_updated and not kap_changed:
+                # Reprocessing the same cached 279-symbol snapshot every few seconds
+                # only creates duplicate CPU/SQLite load. Wait for new market data
+                # or a fresh KAP event.
+                time.sleep(SCAN_INTERVAL)
+                continue
+
             # Build cross-sectional breadth/regime/ranking once per snapshot.
             market_context = (
                 build_market_context(market_data)
@@ -1169,7 +1183,7 @@ def scanner_loop():
                 else None
             )
 
-            if TRADING_V3_ENABLED:
+            if TRADING_V3_ENABLED and snapshot_updated:
                 persist_market_snapshot(
                     market_data,
                     market_context,
