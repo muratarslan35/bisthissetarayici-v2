@@ -13,8 +13,10 @@ DB_PATH = BASE_DIR / "system.db"
 # ======================================================
 
 def get_connection():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 # ======================================================
@@ -24,6 +26,11 @@ def get_connection():
 def init_db():
     conn = get_connection()
     cur = conn.cursor()
+
+    # Separate web + scanner processes share this DB. WAL allows readers
+    # to continue while the worker persists scanner/trade updates.
+    cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA synchronous=NORMAL")
 
     # ==================================================
     # USERS TABLE
