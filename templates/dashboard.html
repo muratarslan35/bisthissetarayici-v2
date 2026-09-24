@@ -166,7 +166,7 @@ th,td{padding:10px 8px;border-bottom:1px solid #172334;white-space:nowrap}
       <div class="panel-title"><h2>Son Doğrulanmış KAP Bildirimleri</h2><span>resmi KAP id ve link ile</span></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>ID</th><th>Hisse</th><th>Konu</th><th>Skor</th><th>RSS</th><th>HTML</th><th>Zaman</th></tr></thead>
+          <thead><tr><th>ID</th><th>Hisse</th><th>Konu</th><th>Skor</th><th>Kaynak</th><th>Detail</th><th>Zaman</th></tr></thead>
           <tbody id="kap-event-body"></tbody>
         </table>
       </div>
@@ -261,8 +261,8 @@ function renderKap(kap){
 
   const events=kap?.recent||[];
   document.getElementById("kap-event-body").innerHTML=events.length?events.map(r=>`
-    <tr><td>${esc(r.kap_id)}</td><td><b>${esc(r.symbol)}</b></td><td>${esc(r.title)}</td>
-    <td>${esc(r.score)}</td><td>${r.rss_seen?"✓":"-"}</td><td>${r.html_seen?"✓":"-"}</td>
+    <tr><td>${esc(r.kap_id)}</td><td><b>${esc(r.symbol)}</b></td><td>${esc(r.subject)}</td>
+    <td>${esc(r.score)}</td><td>${esc(r.discovery_source)}</td><td>${r.detail_verified?"✓":"-"}</td>
     <td>${timeShort(r.event_time)}</td></tr>`).join("")
     :'<tr><td colspan="7" class="empty">Doğrulanmış KAP kaydı henüz yok.</td></tr>';
 }
