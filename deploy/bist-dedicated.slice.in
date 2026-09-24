@@ -1,0 +1,15 @@
+[Unit]
+Description=BIST Trading Dedicated VM Slice
+
+[Slice]
+CPUAccounting=true
+MemoryAccounting=true
+IOAccounting=true
+
+# Dedicated VM: BIST may use most of the machine, while keeping OS headroom.
+CPUQuota=180%
+CPUWeight=100
+MemoryHigh=80%
+MemoryMax=90%
+MemorySwapMax=100%
+IOWeight=100
