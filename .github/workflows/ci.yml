@@ -28,3 +28,7 @@ jobs:
 
       - name: Run tests
         run: python -m unittest discover -s tests -v
+
+      - name: Live KAP source smoke
+        continue-on-error: true
+        run: python scripts/check_kap_live.py
