@@ -2,7 +2,6 @@ import requests
 import re
 from datetime import datetime
 from dateutil import parser
-import feedparser
 import json
 import os
 import io
@@ -12,6 +11,8 @@ import io
 # ======================================================
 
 from google import genai
+from kap_service import get_recent_verified_events
+from utils import FALLBACK_SYMBOLS
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
@@ -39,6 +40,45 @@ def extract_json_safe(text):
         return []
     except:
         return []
+
+
+def deterministic_parse_brut(text):
+    """
+    Deterministic first-pass parser for official KAP restriction text.
+    AI is never the only source of a brüt-takas decision.
+    """
+    if not text:
+        return {}
+
+    normalized = text.lower().replace("ı", "i")
+    if "brüt" not in text.lower() and "brut" not in normalized:
+        return {}
+
+    allowed = {
+        str(symbol).upper().replace(".IS", "")
+        for symbol in FALLBACK_SYMBOLS
+    }
+    tokens = set(re.findall(r"(?<![A-Z0-9])[A-Z0-9]{2,8}(?![A-Z0-9])", text.upper()))
+    symbols = sorted(token for token in tokens if token in allowed)
+
+    dates = re.findall(r"\b(\d{2}[./-]\d{2}[./-]\d{4})\b", text)
+    dates = [d.replace("/", ".").replace("-", ".") for d in dates]
+
+    start_date = dates[0] if dates else "-"
+    end_date = dates[1] if len(dates) > 1 else "-"
+
+    results = {}
+    for symbol in symbols:
+        end_dt = parse_date_safe(end_date) if end_date != "-" else None
+        results[f"{symbol}.IS"] = {
+            "start_date": start_date,
+            "end_date": end_date,
+            "days_left": days_left_calc(end_dt),
+            "type": "Brüt Takas (KAP - Deterministic)",
+            "priority": 95,
+        }
+
+    return results
 
 
 def gemini_parse_brut(text):
@@ -197,29 +237,42 @@ def clean_expired(data):
 # ======================================================
 
 def fetch_kap_html():
+    """
+    Read only KAP disclosure links already verified by kap_service.
+    This avoids a second independent RSS reader.
+    """
     results = {}
+
     try:
-        feed = feedparser.parse("https://www.kap.org.tr/tr/rss/all")
+        events = get_recent_verified_events(hours=96, contains="brüt", limit=40)
 
-        for entry in feed.entries[:15]:
-            if "brüt" not in entry.title.lower():
-                continue
-
+        for event in events:
             try:
-                r = requests.get(entry.link, headers=HEADERS, timeout=8)
-
-                if "brüt" not in r.text.lower():
+                link = event.get("link")
+                if not link:
                     continue
 
-                results.update(gemini_parse_brut(r.text))
+                r = requests.get(link, headers=HEADERS, timeout=8)
+                if r.status_code != 200:
+                    continue
 
-            except:
-                continue
-    except:
-        pass
+                text = r.text
+                if "brüt" not in text.lower() and "brut" not in text.lower():
+                    # Public detail HTML may be client-rendered; use the already
+                    # verified KAP title/summary as a deterministic fallback.
+                    text = f"{event.get('title','')} {event.get('summary','')}"
+
+                deterministic = deterministic_parse_brut(text)
+                ai = gemini_parse_brut(text) if client else {}
+                results.update(merge_all(deterministic, ai))
+
+            except Exception as e:
+                print("KAP BRUT DETAIL ERROR:", e)
+
+    except Exception as e:
+        print("KAP BRUT VERIFIED EVENT ERROR:", e)
 
     return results
-
 
 def fetch_doviz_html():
     results = {}
@@ -248,26 +301,27 @@ def fetch_doviz_html():
 
 
 def fetch_kap_pdf():
+    """
+    PDF fallback only for KAP IDs already verified by the central KAP service.
+    """
     try:
-        feed = feedparser.parse("https://www.kap.org.tr/tr/rss/all")
+        events = get_recent_verified_events(hours=96, contains="brüt", limit=20)
 
-        for entry in feed.entries[:10]:
-            m = re.search(r"/tr/Bildirim/(\\d+)", entry.link)
-            if not m:
+        for event in events:
+            kap_id = event.get("kap_id")
+            if not kap_id:
                 continue
 
-            pdf_url = f"https://www.kap.org.tr/tr/BildirimPdf/{m.group(1)}"
-
+            pdf_url = f"https://www.kap.org.tr/tr/BildirimPdf/{kap_id}"
             r = requests.get(pdf_url, headers=HEADERS, timeout=8)
 
-            if "application/pdf" in r.headers.get("content-type", ""):
+            if r.status_code == 200 and "application/pdf" in r.headers.get("content-type", ""):
                 return r.content
 
-    except:
-        pass
+    except Exception as e:
+        print("KAP PDF ERROR:", e)
 
     return None
-
 
 def parse_pdf(pdf_bytes):
     try:
@@ -300,7 +354,9 @@ def fetch_pdf_brut():
     if "brüt" not in text.lower():
         return results
 
-    results.update(gemini_parse_brut(text))
+    results.update(deterministic_parse_brut(text))
+    if client:
+        results.update(gemini_parse_brut(text))
 
     return results
 
