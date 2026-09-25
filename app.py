@@ -797,6 +797,7 @@ def health():
 # ======================================================
 
 @app.route(f"/{ADMIN_PANEL_PATH}")
+@app.route("/admin")
 def admin_panel():
     return render_template("admin.html")
 
