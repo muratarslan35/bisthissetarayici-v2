@@ -1,0 +1,168 @@
+name: Migrate BIST Via Temporary Bridge
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/migrate-bist-via-bridge.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: production
+    steps:
+      - name: Configure dedicated BIST SSH
+        env:
+          KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/target_key
+          chmod 600 ~/.ssh/target_key
+
+      - name: Pull legacy state and deploy dedicated BIST
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/target_key -o BatchMode=yes -o IdentitiesOnly=yes             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null             ubuntu@89.168.99.141 'bash -se' <<'TARGET'
+          set -Eeuo pipefail
+
+          TARGET=/home/ubuntu/bistbot
+          BRIDGE=/home/ubuntu/.ssh/bist_migration_bridge
+          SOURCE=ubuntu@130.162.48.162
+          REMOTE_ARCHIVE=/tmp/bist-state-20260925.tgz
+          LOCAL_ARCHIVE=/tmp/bist-state-20260925.tgz
+
+          test -s "$BRIDGE"
+          chmod 600 "$BRIDGE"
+
+          ssh_opts=(
+            -i "$BRIDGE"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=no
+            -o UserKnownHostsFile=/dev/null
+            -o ConnectTimeout=15
+          )
+
+          echo "=== SOURCE CONNECTIVITY ==="
+          ssh "${ssh_opts[@]}" "$SOURCE" 'echo SOURCE_BRIDGE_OK; hostname; test -d /home/ubuntu/bistbot'
+
+          echo "=== SOURCE STATE PACKAGE ==="
+          ssh "${ssh_opts[@]}" "$SOURCE" 'bash -se' <<'SOURCE_SCRIPT'
+          set -Eeuo pipefail
+          cd /home/ubuntu/bistbot
+          files=()
+          for item in .env system.db data fallback_state.json successful_signals.json; do
+            [ -e "$item" ] && files+=("$item")
+          done
+          test "${#files[@]}" -gt 0
+          tar -czf /tmp/bist-state-20260925.tgz "${files[@]}"
+          chmod 600 /tmp/bist-state-20260925.tgz
+          echo "SOURCE_STATE_READY=PASS"
+          ls -lh /tmp/bist-state-20260925.tgz
+          SOURCE_SCRIPT
+
+          scp "${ssh_opts[@]}" "$SOURCE:$REMOTE_ARCHIVE" "$LOCAL_ARCHIVE"
+          test -s "$LOCAL_ARCHIVE"
+          echo "STATE_TRANSFER=PASS"
+          ls -lh "$LOCAL_ARCHIVE"
+
+          echo "=== HOST PREP ==="
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -y
+          sudo apt-get install -y git curl python3 python3-venv python3-pip build-essential
+
+          if ! swapon --show --noheadings | grep -q .; then
+            sudo fallocate -l 2G /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile >/dev/null
+            sudo swapon /swapfile
+            grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+          fi
+          echo "SWAP_READY=PASS"
+          free -h
+
+          echo "=== CODE INSTALL ==="
+          if [ ! -d "$TARGET/.git" ]; then
+            rm -rf "$TARGET"
+            git clone https://github.com/muratarslan35/bisthissetarayici-v2.git "$TARGET"
+          else
+            cd "$TARGET"
+            git fetch --prune origin
+            git reset --hard origin/main
+            git clean -fd -e .env -e system.db -e data/ -e fallback_state.json -e successful_signals.json
+          fi
+
+          cd "$TARGET"
+          rm -rf venv
+          python3 -m venv venv
+          venv/bin/python -m pip install --upgrade pip setuptools wheel
+          venv/bin/pip install -r requirements.txt
+          venv/bin/python -m compileall -q .
+          echo "CODE_INSTALL=PASS"
+
+          echo "=== STATE RESTORE ==="
+          sudo systemctl stop bist-trading-web.service bist-trading-worker.service 2>/dev/null || true
+
+          existing=()
+          for item in .env system.db data fallback_state.json successful_signals.json; do
+            [ -e "$item" ] && existing+=("$item")
+          done
+          if [ "${#existing[@]}" -gt 0 ]; then
+            tar -czf /home/ubuntu/bist-target-pre-migration-backup.tgz "${existing[@]}" || true
+            chmod 600 /home/ubuntu/bist-target-pre-migration-backup.tgz || true
+          fi
+
+          tar -xzf "$LOCAL_ARCHIVE" -C "$TARGET"
+          rm -f "$LOCAL_ARCHIVE"
+          chown -R ubuntu:ubuntu "$TARGET"
+          test -f "$TARGET/system.db"
+          test -f "$TARGET/.env"
+          echo "STATE_RESTORE=PASS"
+
+          echo "=== DEDICATED SERVICES ==="
+          cd "$TARGET"
+          bash deploy/install_dedicated_vm_services.sh "$TARGET"
+
+          test "$(sudo systemctl is-active bist-trading-web.service)" = "active"
+          test "$(sudo systemctl is-active bist-trading-worker.service)" = "active"
+
+          curl --fail --silent --show-error http://127.0.0.1:5000/health >/tmp/bist-health.json
+          python3 - <<'PY'
+          import json
+          with open('/tmp/bist-health.json', encoding='utf-8') as f:
+              data = json.load(f)
+          print("TARGET_HEALTH=PASS")
+          print("status=", data.get("status"))
+          print("kap_status=", data.get("kap_status"))
+          PY
+
+          echo "TARGET_COMMIT=$(git rev-parse HEAD)"
+          echo "BIST_WEB=$(sudo systemctl is-active bist-trading-web.service)"
+          echo "BIST_WORKER=$(sudo systemctl is-active bist-trading-worker.service)"
+
+          echo "=== BRIDGE CLEANUP ==="
+          ssh "${ssh_opts[@]}" "$SOURCE" 'bash -se' <<'SOURCE_CLEAN'
+          set -Eeuo pipefail
+          rm -f /tmp/bist-state-20260925.tgz
+          tmp=$(mktemp)
+          grep -v 'bist-migration-bridge-20260925' /home/ubuntu/.ssh/authorized_keys > "$tmp" || true
+          cat "$tmp" > /home/ubuntu/.ssh/authorized_keys
+          rm -f "$tmp"
+          chmod 600 /home/ubuntu/.ssh/authorized_keys
+          echo "SOURCE_BRIDGE_REMOVED=PASS"
+          SOURCE_CLEAN
+
+          rm -f /home/ubuntu/.ssh/bist_migration_bridge /home/ubuntu/.ssh/bist_migration_bridge.pub
+          echo "TARGET_BRIDGE_REMOVED=PASS"
+
+          echo "=== FINAL ==="
+          free -h
+          df -h /
+          echo "BIST_DEDICATED_MIGRATION=PASS"
+          TARGET
