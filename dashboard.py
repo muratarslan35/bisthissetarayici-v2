@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 from flask import Blueprint, jsonify
 
 from dashboard_store import get_dashboard_data
+from universe_manager import universe_status
 
 dashboard_bp = Blueprint("dashboard", __name__)
 TR_TZ = ZoneInfo("Europe/Istanbul")
@@ -57,4 +58,8 @@ def dashboard_api():
     """
     payload = get_dashboard_data()
     payload["server_time"] = datetime.now(TR_TZ).strftime("%H:%M:%S")
+    try:
+        payload["universe"] = universe_status()
+    except Exception:
+        payload["universe"] = {}
     return jsonify(payload)
