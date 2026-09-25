@@ -7,6 +7,8 @@ on:
     paths:
       - "*.py"
       - "deploy/**"
+      - "templates/**"
+      - "static/**"
       - "requirements.txt"
       - "tests/**"
       - ".github/workflows/deploy-dedicated-bist.yml"
