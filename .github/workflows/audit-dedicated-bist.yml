@@ -33,5 +33,25 @@ jobs:
           set -Eeuo pipefail
           ssh -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -o ConnectTimeout=15 ubuntu@89.168.99.141 \
-            'echo TARGET_SSH_OK; id; hostname; uname -a; nproc; free -h; df -h /'
+            -o ConnectTimeout=15 ubuntu@89.168.99.141 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          echo TARGET_SSH_OK
+          id
+          hostname
+          uname -a
+          nproc
+          free -h
+          df -h /
+          echo "BIST_WEB=$(sudo systemctl is-active bist-trading-web.service)"
+          echo "BIST_WORKER=$(sudo systemctl is-active bist-trading-worker.service)"
+          curl --fail --silent --show-error http://127.0.0.1:5000/health >/tmp/bist-health-audit.json
+          python3 - <<'PY'
+          import json
+          with open('/tmp/bist-health-audit.json', encoding='utf-8') as f:
+              data=json.load(f)
+          print("BIST_HEALTH_HTTP=PASS")
+          print("KAP_STATUS=", data.get("kap_status"))
+          PY
+          test "$(sudo systemctl is-active bist-trading-web.service)" = "active"
+          test "$(sudo systemctl is-active bist-trading-worker.service)" = "active"
+          REMOTE
