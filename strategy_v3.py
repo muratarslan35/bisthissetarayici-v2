@@ -748,6 +748,167 @@ def evaluate_intraday_signals(item, ctx, kap_cache=None):
     return [best]
 
 
+
+def evaluate_fast_entry_signal(item, ctx, kap_cache=None):
+    """
+    Event-driven early-entry evaluator used by the fast watchlist lane.
+
+    The full market snapshot remains the structural source of truth (daily/15m
+    trend, ATR, VWAP, breakout, cross-sectional relative strength). Only the
+    current price/short-horizon acceleration comes from the fast quote overlay.
+    This prevents a sub-minute quote from bypassing liquidity/risk controls.
+    """
+    symbol = item.get("symbol")
+    price = _num(item.get("current_price"))
+    quote = item.get("fast_quote") or {}
+    fast_age = _num(item.get("fast_age_seconds"), 999.0)
+
+    if not symbol or not price or fast_age is None or fast_age > 45:
+        return []
+
+    now = _now()
+    if now.hour < 10 or now.hour >= 17:
+        return []
+
+    d15 = _frame(item, "15m")
+    d1 = _closed(_frame(item, "1d"), intraday=False)
+    if d15 is None or len(d15) < 40 or d1 is None or len(d1) < 60:
+        return []
+
+    turnover = _turnover_20d(d1)
+    metrics = item.get("universe_metrics") or {}
+    slow_burn = bool(metrics.get("slow_burn"))
+    min_turnover = MIN_DAILY_TURNOVER if not slow_burn else max(
+        8_000_000.0,
+        MIN_DAILY_TURNOVER * 0.40,
+    )
+    if turnover < min_turnover:
+        return []
+
+    rs_pct = ctx.get("intraday_rank", {}).get(symbol, 0.0)
+    fast_rvol = _num(quote.get("rvol"), 0.0) or 0.0
+    ch15 = _num(quote.get("change_15s_pct"), 0.0) or 0.0
+    ch30 = _num(quote.get("change_30s_pct"), 0.0) or 0.0
+    ch60 = _num(quote.get("change_60s_pct"), 0.0) or 0.0
+    day_change = _num(quote.get("day_change_pct"), 0.0) or 0.0
+
+    # Do not chase a stock already pinned close to the daily upper limit.
+    if day_change >= 9.7:
+        return []
+
+    close1 = d1["Close"].astype(float)
+    ema20d = close1.ewm(span=20, adjust=False).mean()
+    ema50d = close1.ewm(span=50, adjust=False).mean()
+    daily_constructive = (
+        close1.iloc[-1] >= ema20d.iloc[-1]
+        and ema20d.iloc[-1] >= ema50d.iloc[-1] * 0.995
+    )
+    if not daily_constructive:
+        return []
+
+    vwap = session_vwap(d15)
+    atr15 = _atr(_closed(d15, intraday=True))
+    breakout = _breakout_level(d15, 20)
+    if not vwap or not atr15 or not breakout:
+        return []
+
+    kap = _fresh_kap(symbol, kap_cache, max_minutes=30)
+    kap_verified = bool(kap and kap.get("verified"))
+
+    standard_mover = (
+        rs_pct >= 0.78
+        and fast_rvol >= 1.20
+        and (ch60 >= 0.22 or ch30 >= 0.16 or ch15 >= 0.10)
+    )
+    slow_burn_mover = (
+        slow_burn
+        and rs_pct >= 0.70
+        and fast_rvol >= 0.90
+        and ch60 >= 0.12
+    )
+    kap_mover = (
+        kap_verified
+        and rs_pct >= 0.65
+        and fast_rvol >= 0.90
+        and ch60 >= 0.05
+    )
+
+    if not (standard_mover or slow_burn_mover or kap_mover):
+        return []
+
+    # "Early" means close to the structural trigger, not several ATRs after it.
+    breakout_gap_pct = (price / breakout - 1.0) * 100.0
+    extension_atr = max(0.0, price - breakout) / atr15
+    near_trigger = breakout_gap_pct >= -0.45 and extension_atr <= 0.90
+    if not near_trigger:
+        return []
+
+    if price < vwap and not kap_mover:
+        return []
+
+    score = 56.0 + rs_pct * 16.0
+    score += min(12.0, max(0.0, (fast_rvol - 0.85) * 12.0))
+    score += min(12.0, max(0.0, ch60 * 12.0))
+    score += min(6.0, max(0.0, day_change * 1.2))
+
+    reasons = [
+        "Hızlı izleme listesinde erken momentum",
+        f"60 sn fiyat ivmesi %{round(ch60, 2)}",
+        f"Anlık RVOL {round(fast_rvol, 2)}x",
+        f"Intraday göreceli güç yüzdelik: %{round(rs_pct * 100)}",
+        f"Yapısal kırılıma mesafe %{round(breakout_gap_pct, 2)}",
+        "Günlük trend yapısı pozitif",
+    ]
+
+    if slow_burn:
+        score += 4.0
+        reasons.append("3-5 günlük istikrarlı slow-burn aday havuzu")
+
+    if kap_verified:
+        score += min(10.0, max(4.0, _num(kap.get("score"), 0.0) or 0.0))
+        reasons.insert(0, "Doğrulanmış taze KAP + erken fiyat teyidi")
+
+    if ctx.get("regime") == "RISK_ON":
+        score += 5.0
+    elif ctx.get("regime") == "RISK_OFF":
+        score -= 7.0
+
+    algorithm = "KAP_EARLY_IGNITION_V3" if kap_verified else "EARLY_IGNITION_V3"
+    threshold = 76 if kap_verified else 78
+
+    structural = max(vwap, breakout - atr15 * 0.70)
+    risk = _risk_levels(price, atr15, structural, position=False)
+    if not risk or score < threshold or not _cooldown_ok(symbol, algorithm, 120):
+        return []
+
+    sig = _base_signal(
+        item,
+        "INTRADAY",
+        algorithm,
+        score,
+        reasons,
+        ctx,
+        rs_pct,
+        risk,
+    )
+    if not sig:
+        return []
+
+    sig["session_vwap"] = round(vwap, 2)
+    sig["session_rvol"] = round(fast_rvol, 2)
+    sig["fast_change_15s_pct"] = round(ch15, 3)
+    sig["fast_change_30s_pct"] = round(ch30, 3)
+    sig["fast_change_60s_pct"] = round(ch60, 3)
+    sig["fast_source"] = item.get("fast_source")
+    sig["valid_until"] = "17:30"
+    if kap_verified:
+        sig["event_title"] = kap.get("title")
+        sig["event_link"] = kap.get("link")
+
+    _mark_sent(symbol, algorithm)
+    return [sig]
+
+
 def format_v3_signal_message(signal):
     scope = signal.get("signal_scope")
     icon = "📌" if scope == "POSITION" else "⚡"
@@ -774,6 +935,8 @@ def format_v3_signal_message(signal):
         lines.append(f"📦 Session RVOL: {signal.get('session_rvol')}x")
     if signal.get("session_vwap") is not None:
         lines.append(f"〽️ Session VWAP: {signal.get('session_vwap')}")
+    if signal.get("fast_change_60s_pct") is not None:
+        lines.append(f"⚡ 60 sn ivme: %{signal.get('fast_change_60s_pct')}")
     if signal.get("holding_horizon"):
         lines.append(f"🗓 Ufuk: {signal.get('holding_horizon')}")
     if signal.get("valid_until"):

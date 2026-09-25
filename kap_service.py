@@ -27,9 +27,9 @@ KAP_DETAIL_API = os.getenv(
 KAP_DISCLOSURE_URL = "https://www.kap.org.tr/tr/Bildirim/{disclosure_index}"
 
 HTTP_TIMEOUT = max(4, int(os.getenv("KAP_HTTP_TIMEOUT_SECONDS", "10")))
-IGS_INTERVAL = max(30, int(os.getenv("KAP_IGS_POLL_SECONDS", "60")))
+IGS_INTERVAL = max(15, int(os.getenv("KAP_IGS_POLL_SECONDS", "20")))
 DDK_INTERVAL = max(120, int(os.getenv("KAP_DDK_POLL_SECONDS", "300")))
-OFF_HOURS_INTERVAL = max(120, int(os.getenv("KAP_OFF_HOURS_POLL_SECONDS", "300")))
+OFF_HOURS_INTERVAL = max(30, int(os.getenv("KAP_OFF_HOURS_POLL_SECONDS", "60")))
 MAX_BACKOFF = max(300, int(os.getenv("KAP_MAX_BACKOFF_SECONDS", "900")))
 DETAIL_VERIFY_BUDGET = max(1, int(os.getenv("KAP_DETAIL_VERIFY_BUDGET", "10")))
 

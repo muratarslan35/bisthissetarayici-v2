@@ -29,6 +29,20 @@ Environment=YF_BATCH_SIZE=35
 Environment=YF_INTRADAY_TTL_SECONDS=300
 Environment=YF_DAILY_TTL_SECONDS=21600
 
+# Dedicated real-time architecture: broad structural scan + narrow fast lane.
+Environment=UNIVERSE_REFRESH_SECONDS=900
+Environment=UNIVERSE_DAILY_ENRICH_SECONDS=3600
+Environment=UNIVERSE_PROMOTED_MAX=140
+Environment=UNIVERSE_ENRICH_MAX=360
+Environment=FAST_WATCHLIST_SIZE=60
+Environment=FAST_POLL_SECONDS=20
+Environment=FAST_QUOTE_MAX_AGE_SECONDS=45
+
+# Official KAP ingestion runs independently from Yahoo/full-universe scans.
+Environment=KAP_IGS_POLL_SECONDS=20
+Environment=KAP_OFF_HOURS_POLL_SECONDS=60
+Environment=KAP_WATCH_LOOP_SECONDS=10
+
 EnvironmentFile=-@BIST_PATH@/.env
 EnvironmentFile=-/etc/bist-trading.env
 
