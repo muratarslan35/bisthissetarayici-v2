@@ -54,4 +54,17 @@ jobs:
           PY
           test "$(sudo systemctl is-active bist-trading-web.service)" = "active"
           test "$(sudo systemctl is-active bist-trading-worker.service)" = "active"
+
+          cd /home/ubuntu/bistbot
+          echo "=== LIVE MARKET ARCHITECTURE ==="
+          venv/bin/python - <<'PY'
+          import json
+          from universe_manager import universe_status
+          from fast_market_lane import fast_status
+          print("UNIVERSE_STATUS=" + json.dumps(universe_status(), ensure_ascii=False))
+          print("FAST_STATUS=" + json.dumps(fast_status(), ensure_ascii=False))
+          PY
+
+          echo "=== WORKER ARCHITECTURE LOGS ==="
+          sudo journalctl -u bist-trading-worker.service --since "15 minutes ago" --no-pager             | grep -E 'UNIVERSE_REFRESH|UNIVERSE .*ERROR|KAP_WATCH|KAP WATCH ERROR|FAST_SIGNAL|FAST LANE ERROR|BIST scanner worker starting|Döngü:'             | tail -100 || true
           REMOTE
