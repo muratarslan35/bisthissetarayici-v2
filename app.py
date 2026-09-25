@@ -1044,19 +1044,30 @@ def generate_invite_codes():
 
 
 def _format_early_kap_notice(symbol, event):
-    title = event.get("title") or "KAP Bildirimi"
+    title = event.get("title") or "KAP bildirimi"
     score = event.get("score")
     link = event.get("link")
+    ticker = str(symbol).replace(".IS", "")
     lines = [
         "📰 <b>KAP ERKEN UYARI</b>",
-        f"📊 <b>{str(symbol).replace('.IS', '')}</b>",
-        f"📌 {title}",
+        f"📊 <b>{ticker}</b>",
+        "",
+        "📌 <b>Yeni bildirim:</b>",
+        str(title),
     ]
     if score is not None:
-        lines.append(f"🧠 Olay skoru: {score}")
-    lines.append("⏱ Teknik teyit için hızlı izleme listesine alındı.")
+        lines.append(f"🧠 Haber önem puanı: <b>{score}</b>")
+    lines.extend([
+        "",
+        "💡 <b>Bu ne anlama geliyor?</b>",
+        "KAP bildirimi resmi kaynaktan doğrulandı. Hisse hızlı izleme listesine alındı; "
+        "henüz tek başına alım sinyali değildir.",
+        "",
+        "⚡ <b>Sıradaki kontrol:</b> fiyat ivmesi, hacim, VWAP, RSI ve trend teyidi birlikte aranacak. "
+        "Teknik koşullar da güçlenirse ayrıca güçlü işlem sinyali gönderilecek.",
+    ])
     if link:
-        lines.append(str(link))
+        lines.extend(["", f"🔗 Resmî KAP bağlantısı: {link}"])
     return "\n".join(lines)
 
 
