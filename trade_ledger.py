@@ -310,27 +310,56 @@ def update_open_trades(symbol, price):
     return events
 
 
+def _algo_tr(algo):
+    return {
+        "KOMBINE_V3": "Kombine Trend Dönüşü",
+        "SUPER_KOMBINE_V3": "Güçlü Trend Kırılımı",
+        "KAP_POSITION_V3": "KAP Destekli Pozisyon",
+        "MOMENTUM_IGNITION_V3": "Erken Momentum Başlangıcı",
+        "INTRADAY_MOMENTUM_V3": "Gün İçi Momentum Devamı",
+        "KAP_EVENT_INTRADAY_V3": "KAP Destekli Gün İçi Momentum",
+        "EARLY_IGNITION_V3": "Erken Hareket Başlangıcı",
+        "KAP_EARLY_IGNITION_V3": "KAP Destekli Erken Hareket",
+    }.get(str(algo or ""), str(algo or "Strateji").replace("_", " ").title())
+
+
+def _exit_reason_tr(reason):
+    return {
+        "STOP": "Koruyucu stop çalıştı",
+        "TRAILING_STOP": "İz süren stop çalıştı",
+        "TP3": "Ana hedefe ulaştı",
+        "TIME_EXIT": "Takip süresi doldu",
+    }.get(str(reason or ""), str(reason or "İşlem kapandı").replace("_", " ").title())
+
+
 def format_trade_event(event):
+    symbol = str(event.get("symbol") or "").replace(".IS", "")
+    algo = _algo_tr(event.get("algorithm"))
+    gain = event.get("gain_pct")
+
     if event.get("type") == "TP1":
         return (
-            f"🎯 <b>TP1 / RİSK AZALT</b>\n"
-            f"📊 {event.get('symbol')} | {event.get('algorithm')}\n"
-            f"💰 {event.get('entry')} → {round(event.get('price'), 2)}\n"
-            f"📈 %{event.get('gain_pct')}\n"
-            f"Stop paper takibinde maliyete yükseltildi."
+            f"🎯 <b>1. HEDEF GERÇEKLEŞTİ</b>\n"
+            f"📊 <b>{symbol}</b> | {algo}\n"
+            f"💰 Başlangıç: {event.get('entry')} → Güncel: {round(event.get('price'), 2)}\n"
+            f"📈 Fiyat değişimi: <b>%{gain}</b>\n\n"
+            f"🛡 <b>Ne değişti?</b> İlk hedefe ulaşıldığı için sanal takipte stop seviyesi maliyete yükseltildi. "
+            f"Bu aşamadan sonra amaç kazanımı koruyarak trendin devamını izlemek."
         )
 
     if event.get("type") == "TP2":
         return (
-            f"🚀 <b>TP2 / TRAILING DEVAM</b>\n"
-            f"📊 {event.get('symbol')} | {event.get('algorithm')}\n"
-            f"📈 %{event.get('gain_pct')}"
+            f"🚀 <b>2. HEDEF GERÇEKLEŞTİ — TREND DEVAM EDİYOR</b>\n"
+            f"📊 <b>{symbol}</b> | {algo}\n"
+            f"📈 Başlangıçtan fiyat değişimi: <b>%{gain}</b>\n\n"
+            f"🛡 <b>Takip durumu:</b> Stop daha yukarı taşındı ve işlem iz süren stop mantığıyla takip edilmeye devam ediyor."
         )
 
     return (
-        f"🏁 <b>PAPER TRADE KAPANDI</b>\n"
-        f"📊 {event.get('symbol')} | {event.get('algorithm')}\n"
-        f"Sebep: {event.get('reason')}\n"
-        f"📈 Net fiyat değişimi: %{event.get('gain_pct')}\n"
-        f"MFE: %{event.get('mfe_pct')} | MAE: %{event.get('mae_pct')}"
+        f"🏁 <b>SANAL İŞLEM TAKİBİ KAPANDI</b>\n"
+        f"📊 <b>{symbol}</b> | {algo}\n"
+        f"📌 Kapanış nedeni: <b>{_exit_reason_tr(event.get('reason'))}</b>\n"
+        f"📈 Net fiyat değişimi: <b>%{gain}</b>\n"
+        f"⬆️ İşlem sırasında görülen en yüksek avantaj: %{event.get('mfe_pct')}\n"
+        f"⬇️ İşlem sırasında görülen en yüksek ters hareket: %{event.get('mae_pct')}"
     )
