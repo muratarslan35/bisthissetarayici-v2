@@ -981,6 +981,32 @@ def _signal_strength_tr(score):
     return "🟡 SEÇİCİ"
 
 
+def _rsi_phase_tr(signal):
+    r15 = _num(signal.get("rsi_15m"))
+    r4 = _num(signal.get("rsi_4h"))
+    r1 = _num(signal.get("rsi_1d"))
+
+    if r15 is not None and r4 is not None:
+        if r15 >= 75 and r4 >= 70:
+            return "🔴 İLERİ AŞAMA / ŞİŞKİNLİK RİSKİ"
+        if r15 < 60 and 50 <= r4 < 65:
+            return "🟢 YENİ GÜÇLENİYOR"
+        if 60 <= r15 < 75 and 52 <= r4 < 70:
+            return "🟠 GÜÇLÜ VE GELİŞEN"
+        if r4 < 50:
+            return "🟡 4 SAATLİK TEYİT BEKLENİYOR"
+
+    if r4 is not None and r1 is not None:
+        if r4 >= 75 and r1 >= 70:
+            return "🔴 ANA TREND İLERİ AŞAMADA"
+        if 52 <= r4 < 70 and 50 <= r1 < 68:
+            return "🟢 ANA TREND SAĞLIKLI"
+        if r4 < 50 <= r1:
+            return "🟡 4 SAATLİK GÜÇ TOPARLANIYOR"
+
+    return "⚪ RSI FAZI NÖTR"
+
+
 def _rsi_story(signal):
     r15 = _num(signal.get("rsi_15m"))
     r4 = _num(signal.get("rsi_4h"))
@@ -1028,6 +1054,7 @@ def format_v3_signal_message(signal):
         f"🔥 <b>SİNYAL GÜCÜ: {strength}</b>",
         f"⭐ Güç puanı: <b>{score}/100</b>",
         f"🧠 Strateji: <b>{algo_tr}</b>",
+        f"🧭 RSI fazı: <b>{_rsi_phase_tr(signal)}</b>",
         "",
         "💡 <b>Bu bildirim ne anlatıyor?</b>",
         meaning,
