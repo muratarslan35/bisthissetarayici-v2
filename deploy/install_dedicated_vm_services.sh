@@ -70,6 +70,12 @@ sudo systemctl enable "$web_service" "$worker_service"
 sudo systemctl restart "$web_service"
 sudo systemctl restart "$worker_service"
 
+# Public browser access is intentionally limited to the authenticated Flask app
+# on the dedicated BIST VM. If UFW is active, open only the dashboard port.
+if command -v ufw >/dev/null 2>&1 && sudo ufw status | grep -q '^Status: active'; then
+  sudo ufw allow 5000/tcp >/dev/null
+fi
+
 sleep 3
 
 echo "BIST_WEB=$(sudo systemctl is-active "$web_service")"
