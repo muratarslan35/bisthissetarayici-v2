@@ -47,7 +47,10 @@ jobs:
           echo "LIVE_COMMIT=$(git rev-parse HEAD)"
 
           echo "=== PYTHON ENV ==="
-          test -x venv/bin/python
+          if [ ! -x venv/bin/python ]; then
+            python3 -m venv venv
+          fi
+          venv/bin/python -m pip install -q --upgrade pip setuptools wheel
           venv/bin/python -m pip install -q -r requirements.txt
           venv/bin/python -m compileall -q .
           echo "PYTHON_COMPILE=PASS"
