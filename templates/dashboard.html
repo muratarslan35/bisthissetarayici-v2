@@ -2,138 +2,364 @@
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>BIST Trade Engine V3</title>
 <style>
 :root{
-  --bg:#070b13; --panel:#0d1420; --panel2:#111b2a; --border:#1f2b3b;
-  --text:#edf3fb; --muted:#8da0b8; --green:#22c55e; --red:#ef4444;
-  --amber:#f59e0b; --blue:#3b82f6; --cyan:#22d3ee; --violet:#8b5cf6;
+  --bg:#07101d;
+  --surface:#0c1726;
+  --surface-2:#101d2f;
+  --surface-3:#13233a;
+  --border:#22344c;
+  --border-soft:#18283d;
+  --text:#f4f7fb;
+  --muted:#91a4bb;
+  --muted-2:#667c96;
+  --green:#22c55e;
+  --green-bg:rgba(34,197,94,.12);
+  --red:#ef4444;
+  --red-bg:rgba(239,68,68,.12);
+  --amber:#f59e0b;
+  --amber-bg:rgba(245,158,11,.12);
+  --blue:#60a5fa;
+  --blue-bg:rgba(96,165,250,.12);
+  --cyan:#22d3ee;
+  --violet:#a78bfa;
+  --shadow:0 16px 42px rgba(0,0,0,.22);
 }
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif}
-.shell{max-width:1600px;margin:0 auto;padding:18px}
-.header{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:16px}
-.brand h1{margin:0;font-size:22px;letter-spacing:.2px}
-.brand p{margin:5px 0 0;color:var(--muted);font-size:12px}
-.header-right{text-align:right;font-size:12px;color:var(--muted)}
-.status-grid{display:grid;grid-template-columns:repeat(7,minmax(130px,1fr));gap:10px;margin-bottom:14px}
-.status-card,.kpi,.panel{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--border);border-radius:14px}
-.status-card{padding:12px 14px}
-.status-label{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted)}
-.status-value{font-size:16px;font-weight:800;margin-top:5px}
-.good{color:var(--green)} .bad{color:var(--red)} .warn{color:var(--amber)} .info{color:var(--cyan)}
-.kpis{display:grid;grid-template-columns:repeat(4,minmax(170px,1fr));gap:10px;margin-bottom:16px}
-.kpi{padding:15px}
-.kpi .num{font-size:26px;font-weight:900;margin-top:4px}
-.kpi .sub{font-size:11px;color:var(--muted);margin-top:5px}
-.tabs{display:flex;gap:8px;overflow:auto;padding-bottom:8px;margin-bottom:12px}
-.tab{border:1px solid var(--border);background:#0e1724;color:var(--muted);padding:9px 14px;border-radius:999px;cursor:pointer;white-space:nowrap;font-weight:700}
-.tab.active{color:white;border-color:#365b8b;background:#172a44}
-.panel{padding:14px;margin-bottom:14px}
-.panel-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
-.panel-title h2{font-size:15px;margin:0}
-.panel-title span{font-size:11px;color:var(--muted)}
-.signal-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px}
-.signal{border:1px solid var(--border);border-radius:13px;padding:14px;background:#0a111c;position:relative;overflow:hidden}
-.signal:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--blue)}
-.signal.intraday:before{background:var(--amber)}
-.signal.closed:before{background:#64748b}
-.signal-head{display:flex;justify-content:space-between;gap:10px;align-items:start}
-.symbol{font-size:21px;font-weight:900}
-.algo{font-size:10px;color:var(--muted);margin-top:3px}
-.score{font-size:12px;font-weight:800;padding:5px 8px;border:1px solid var(--border);border-radius:9px}
-.price-row{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:12px 0}
-.metric{background:#0e1724;padding:8px;border-radius:9px}
-.metric b{display:block;font-size:13px;margin-top:3px}
-.metric span{font-size:9px;color:var(--muted);text-transform:uppercase}
-.levels{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;font-size:11px;margin:8px 0}
-.level{border:1px solid var(--border);border-radius:8px;padding:7px;text-align:center}
-.chips{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}
-.chip{font-size:10px;padding:4px 7px;border-radius:999px;background:#172132;color:#b9c7d8}
-.chip.green{color:#86efac;background:#10261a}.chip.red{color:#fca5a5;background:#2a1215}.chip.amber{color:#fcd34d;background:#2a2010}
-.reasons{margin:10px 0 0;padding-left:17px;color:#b7c4d4;font-size:11px;line-height:1.55}
-table{width:100%;border-collapse:collapse;font-size:12px}
-th{color:var(--muted);text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.5px}
-th,td{padding:10px 8px;border-bottom:1px solid #172334;white-space:nowrap}
-.table-wrap{overflow:auto}
-.empty{text-align:center;padding:34px;color:var(--muted);font-size:13px}
+html{background:var(--bg)}
+body{
+  margin:0;
+  min-height:100vh;
+  background:
+    radial-gradient(circle at 85% -10%,rgba(37,99,235,.13),transparent 32%),
+    linear-gradient(180deg,#08111e 0%,#060d17 100%);
+  color:var(--text);
+  font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+button,a{font:inherit}
+.shell{width:min(1500px,100%);margin:0 auto;padding:22px}
+.topbar{
+  display:flex;align-items:center;justify-content:space-between;gap:18px;
+  padding:4px 2px 20px;border-bottom:1px solid var(--border-soft);margin-bottom:18px;
+}
+.brand{display:flex;align-items:center;gap:13px;min-width:0}
+.brand-mark{
+  width:42px;height:42px;border-radius:13px;display:grid;place-items:center;
+  background:linear-gradient(145deg,#2563eb,#0f4bab);
+  box-shadow:0 8px 24px rgba(37,99,235,.25);font-weight:900;font-size:17px;
+}
+.brand-copy{min-width:0}
+.brand h1{font-size:20px;line-height:1.2;margin:0;font-weight:800;letter-spacing:.1px}
+.brand p{font-size:12px;margin:5px 0 0;color:var(--muted)}
+.top-actions{display:flex;align-items:center;gap:9px}
+.clock{text-align:right;color:var(--muted);font-size:11px;line-height:1.5}
+.action-link{
+  color:#cfe1ff;text-decoration:none;border:1px solid var(--border);background:var(--surface);
+  padding:8px 11px;border-radius:10px;font-size:11px;font-weight:700;
+}
+.action-link:hover{background:var(--surface-2)}
+.summary{
+  display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,.8fr);gap:14px;margin-bottom:14px;
+}
+.hero,.system-card,.kpi,.panel{
+  border:1px solid var(--border);background:linear-gradient(180deg,var(--surface-2),var(--surface));
+  box-shadow:var(--shadow);
+}
+.hero{border-radius:18px;padding:20px;display:flex;justify-content:space-between;gap:18px;align-items:center}
+.hero-eyebrow{font-size:10px;color:var(--muted);letter-spacing:1.2px;text-transform:uppercase;font-weight:800}
+.hero-title{font-size:24px;font-weight:850;margin:5px 0 6px;letter-spacing:-.3px}
+.hero-sub{font-size:12px;color:var(--muted);max-width:680px;line-height:1.55}
+.hero-badge{
+  min-width:145px;border-radius:14px;padding:13px 14px;text-align:center;border:1px solid var(--border);
+  background:#0b1422;
+}
+.hero-badge span{display:block;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px}
+.hero-badge b{display:block;margin-top:5px;font-size:16px}
+.system-card{border-radius:18px;padding:16px}
+.system-title{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);font-weight:800;margin-bottom:12px}
+.system-list{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.sys{
+  background:rgba(8,17,30,.65);border:1px solid var(--border-soft);border-radius:11px;padding:10px 11px;
+}
+.sys span{display:block;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+.sys b{display:block;font-size:13px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.good{color:var(--green)!important}.bad{color:var(--red)!important}.warn{color:var(--amber)!important}.info{color:var(--cyan)!important}
+.detail-strip{
+  display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;
+}
+.detail-pill{
+  border:1px solid var(--border-soft);background:#0a1422;color:var(--muted);
+  border-radius:999px;padding:7px 10px;font-size:10px;
+}
+.detail-pill b{color:#dfe9f5;font-weight:750}
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}
+.kpi{border-radius:15px;padding:15px 16px}
+.kpi-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.kpi-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.65px;font-weight:750}
+.kpi-icon{
+  width:27px;height:27px;display:grid;place-items:center;border-radius:9px;
+  background:var(--blue-bg);color:var(--blue);font-size:13px
+}
+.kpi-value{font-size:27px;font-weight:900;letter-spacing:-.7px;margin-top:8px}
+.kpi-sub{font-size:10px;color:var(--muted-2);margin-top:5px}
+.tabs-wrap{
+  position:sticky;top:0;z-index:20;background:rgba(7,16,29,.94);backdrop-filter:blur(12px);
+  margin:0 -4px 14px;padding:8px 4px;border-bottom:1px solid rgba(34,52,76,.65);
+}
+.tabs{display:flex;gap:7px;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{
+  flex:0 0 auto;border:1px solid transparent;background:transparent;color:var(--muted);
+  padding:9px 12px;border-radius:10px;cursor:pointer;font-size:11px;font-weight:750;
+}
+.tab:hover{background:var(--surface);color:#d9e5f5}
+.tab.active{background:#153258;color:#eaf3ff;border-color:#285386}
+.panel{border-radius:17px;padding:16px;margin-bottom:14px}
+.panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
+.panel-head h2{font-size:15px;margin:0;font-weight:800}
+.panel-head p{font-size:10px;color:var(--muted);margin:5px 0 0;line-height:1.45}
+.panel-badge{
+  flex:0 0 auto;font-size:9px;color:#b8c8da;background:#0a1421;border:1px solid var(--border-soft);
+  border-radius:999px;padding:6px 9px;white-space:nowrap
+}
+.signal-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:11px}
+.signal{
+  position:relative;overflow:hidden;background:#0a1421;border:1px solid var(--border);
+  border-radius:14px;padding:15px
+}
+.signal::before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--blue)}
+.signal.intraday::before{background:var(--amber)}
+.signal-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+.symbol{font-size:21px;font-weight:900;letter-spacing:.1px}
+.strategy{font-size:10px;color:var(--muted);margin-top:4px}
+.strength{
+  font-size:10px;font-weight:850;padding:6px 8px;border-radius:999px;border:1px solid var(--border);
+  white-space:nowrap
+}
+.strength.very-strong{background:var(--green-bg);color:#7ef0a1;border-color:#225c36}
+.strength.strong{background:var(--blue-bg);color:#a9cbff;border-color:#294f7f}
+.strength.selective{background:var(--amber-bg);color:#ffd078;border-color:#644414}
+.signal-story{
+  margin:12px 0;background:#0e1a2a;border:1px solid var(--border-soft);border-radius:11px;padding:10px 11px;
+}
+.signal-story b{font-size:11px}
+.signal-story div{font-size:10px;color:var(--muted);line-height:1.5;margin-top:4px}
+.price-row{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:10px 0}
+.metric,.level{
+  background:#0d1928;border:1px solid var(--border-soft);border-radius:10px;padding:8px 9px
+}
+.metric span,.level span{display:block;font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.55px}
+.metric b,.level b{display:block;font-size:13px;margin-top:3px}
+.levels{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:8px 0}
+.chips{display:flex;gap:5px;flex-wrap:wrap;margin-top:9px}
+.chip{
+  font-size:9px;padding:5px 7px;border-radius:999px;background:#152237;color:#becddd;border:1px solid #20324b
+}
+.chip.green{background:var(--green-bg);color:#8defaa;border-color:#214e31}
+.chip.red{background:var(--red-bg);color:#ff9c9c;border-color:#5b2727}
+.chip.amber{background:var(--amber-bg);color:#ffd07a;border-color:#604518}
+.reasons{margin:11px 0 0;padding-left:17px;color:#b6c4d4;font-size:10px;line-height:1.55}
+.meta{display:flex;justify-content:space-between;gap:8px;margin-top:10px;color:var(--muted-2);font-size:9px}
+.empty{
+  grid-column:1/-1;min-height:120px;display:grid;place-items:center;text-align:center;
+  padding:24px;color:var(--muted);border:1px dashed #263951;border-radius:13px;background:rgba(8,17,30,.45)
+}
+.empty b{display:block;color:#d8e4f2;font-size:12px;margin-bottom:5px}
+.empty span{display:block;font-size:10px;line-height:1.5}
+.table-wrap{overflow:auto;border:1px solid var(--border-soft);border-radius:12px}
+table{width:100%;border-collapse:collapse;font-size:11px;min-width:760px;background:#0a1421}
+th{
+  position:sticky;top:0;background:#101c2c;color:var(--muted);font-size:9px;text-transform:uppercase;
+  letter-spacing:.55px;text-align:left
+}
+th,td{padding:10px;border-bottom:1px solid #17273b;white-space:nowrap}
+tr:last-child td{border-bottom:0}
 .hidden{display:none!important}
-.footer{font-size:10px;color:#60738a;text-align:center;padding:10px}
-@media(max-width:1000px){.status-grid{grid-template-columns:repeat(3,1fr)}.kpis{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:620px){.shell{padding:10px}.header{align-items:flex-start}.status-grid{grid-template-columns:repeat(2,1fr)}.kpis{grid-template-columns:repeat(2,1fr)}.signal-grid{grid-template-columns:1fr}.price-row{grid-template-columns:repeat(2,1fr)}.levels{grid-template-columns:repeat(2,1fr)}.brand h1{font-size:18px}}
+.footer{
+  color:#52677f;font-size:9px;text-align:center;padding:12px 8px 20px;line-height:1.5
+}
+@media(max-width:1050px){
+  .summary{grid-template-columns:1fr}
+  .kpis{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:650px){
+  .shell{padding:12px}
+  .topbar{align-items:flex-start;padding-bottom:14px}
+  .brand-mark{width:37px;height:37px;border-radius:11px;font-size:14px}
+  .brand h1{font-size:17px}
+  .brand p{font-size:10px;max-width:260px}
+  .top-actions{align-items:flex-end;flex-direction:column}
+  .action-link{padding:6px 9px;font-size:10px}
+  .hero{padding:15px;align-items:flex-start}
+  .hero-title{font-size:19px}
+  .hero-sub{font-size:10px}
+  .hero-badge{min-width:108px;padding:10px}
+  .hero-badge b{font-size:13px}
+  .system-card{padding:13px}
+  .system-list{grid-template-columns:1fr 1fr}
+  .kpis{gap:8px}
+  .kpi{padding:12px}
+  .kpi-value{font-size:23px}
+  .panel{padding:12px}
+  .panel-head{margin-bottom:11px}
+  .signal-grid{grid-template-columns:1fr}
+  .signal{padding:13px}
+  .symbol{font-size:19px}
+  .levels{grid-template-columns:repeat(2,1fr)}
+  .detail-strip{gap:5px}
+  .detail-pill{font-size:9px;padding:6px 8px}
+}
 </style>
 </head>
 <body>
 <div class="shell">
-  <div class="header">
+  <header class="topbar">
     <div class="brand">
-      <h1>BIST Trade Engine V3</h1>
-      <p>Bot pozisyonları ve kanal intraday işlemleri ayrı motorlarda izlenir.</p>
+      <div class="brand-mark">B3</div>
+      <div class="brand-copy">
+        <h1>BIST Trade Engine V3</h1>
+        <p>Erken hareket, pozisyon ve KAP sinyallerini tek ekranda takip edin.</p>
+      </div>
     </div>
-    <div class="header-right">
-      <div id="server-time">--:--:--</div>
-      <div id="last-refresh">Dashboard bekleniyor</div>
+    <div class="top-actions">
+      <div class="clock">
+        <div id="server-time">--:--:--</div>
+        <div id="last-refresh">Veri bekleniyor</div>
+      </div>
+      <a class="action-link" href="/admin">Yönetim</a>
     </div>
+  </header>
+
+  <section class="summary">
+    <div class="hero">
+      <div>
+        <div class="hero-eyebrow">Canlı sistem özeti</div>
+        <div id="hero-title" class="hero-title">Sistem kontrol ediliyor</div>
+        <div id="hero-sub" class="hero-sub">Tarayıcı, veri kaynakları ve sinyal motorlarının güncel durumu hazırlanıyor.</div>
+      </div>
+      <div class="hero-badge">
+        <span>Genel Durum</span>
+        <b id="overall-status">BEKLENİYOR</b>
+      </div>
+    </div>
+
+    <div class="system-card">
+      <div class="system-title">Temel Sistem Durumu</div>
+      <div class="system-list">
+        <div class="sys"><span>Piyasa</span><b id="market-status">-</b></div>
+        <div class="sys"><span>Tarayıcı</span><b id="worker-status">-</b></div>
+        <div class="sys"><span>Piyasa Eğilimi</span><b id="regime">-</b></div>
+        <div class="sys"><span>KAP</span><b id="kap-status">-</b></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="detail-strip">
+    <div class="detail-pill">Aktif evren: <b id="universe">-</b></div>
+    <div class="detail-pill">Hızlı izleme: <b id="fast-watchlist">-</b></div>
+    <div class="detail-pill">Gün içi genişlik: <b id="breadth">-</b></div>
+    <div class="detail-pill">Veri kaynağı: <b id="source">-</b></div>
   </div>
 
-  <div class="status-grid">
-    <div class="status-card"><div class="status-label">Piyasa</div><div id="market-status" class="status-value">-</div></div>
-    <div class="status-card"><div class="status-label">Scanner Worker</div><div id="worker-status" class="status-value">-</div></div>
-    <div class="status-card"><div class="status-label">Market Regime</div><div id="regime" class="status-value">-</div></div>
-    <div class="status-card"><div class="status-label">Intraday Breadth</div><div id="breadth" class="status-value">-</div></div>
-    <div class="status-card"><div class="status-label">Evren</div><div id="universe" class="status-value">-</div></div>
-    <div class="status-card"><div class="status-label">Veri</div><div id="source" class="status-value">-</div></div>
-    <div class="status-card"><div class="status-label">KAP</div><div id="kap-status" class="status-value">-</div></div>
-  </div>
+  <section class="kpis">
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">Açık Pozisyon</div><div class="kpi-icon">P</div></div>
+      <div id="kpi-pos-open" class="kpi-value">0</div>
+      <div class="kpi-sub">2–10 işlem günlük bot pozisyonları</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">Gün İçi İşlem</div><div class="kpi-icon">G</div></div>
+      <div id="kpi-intra-open" class="kpi-value">0</div>
+      <div class="kpi-sub">Aynı gün yönetilen aktif işlemler</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">30 Gün Kapanan</div><div class="kpi-icon">30</div></div>
+      <div id="kpi-closed" class="kpi-value">0</div>
+      <div class="kpi-sub">Tamamlanmış sanal işlem takibi</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">30 Gün Pozitif</div><div class="kpi-icon">%</div></div>
+      <div id="kpi-win" class="kpi-value">-</div>
+      <div class="kpi-sub">Kapanan işlemler içindeki pozitif oran</div>
+    </div>
+  </section>
 
-  <div class="kpis">
-    <div class="kpi"><div class="status-label">Açık Bot Pozisyonu</div><div id="kpi-pos-open" class="num">0</div><div class="sub">POSITION paper-trade</div></div>
-    <div class="kpi"><div class="status-label">Açık Günlük Trade</div><div id="kpi-intra-open" class="num">0</div><div class="sub">INTRADAY paper-trade</div></div>
-    <div class="kpi"><div class="status-label">30 Gün Kapanan</div><div id="kpi-closed" class="num">0</div><div class="sub">ölçülmüş paper-trade</div></div>
-    <div class="kpi"><div class="status-label">30 Gün Pozitif</div><div id="kpi-win" class="num">-</div><div class="sub">kapanan işlemler üzerinden</div></div>
-  </div>
-
-  <div class="tabs">
-    <button class="tab active" data-tab="overview">Genel Bakış</button>
-    <button class="tab" data-tab="position">Bot / Pozisyon</button>
-    <button class="tab" data-tab="intraday">Kanal / Günlük Trade</button>
-    <button class="tab" data-tab="performance">Algoritma Performansı</button>
-    <button class="tab" data-tab="closed">Kapanan İşlemler</button>
-    <button class="tab" data-tab="kap">KAP Sağlık</button>
+  <div class="tabs-wrap">
+    <nav class="tabs" aria-label="Dashboard bölümleri">
+      <button class="tab active" data-tab="overview">Genel Bakış</button>
+      <button class="tab" data-tab="position">Pozisyon</button>
+      <button class="tab" data-tab="intraday">Gün İçi</button>
+      <button class="tab" data-tab="performance">Performans</button>
+      <button class="tab" data-tab="closed">Geçmiş İşlemler</button>
+      <button class="tab" data-tab="kap">KAP</button>
+    </nav>
   </div>
 
   <section id="view-overview">
     <div class="panel">
-      <div class="panel-title"><h2>Aktif Pozisyon Sinyalleri</h2><span>2–10 işlem günü</span></div>
+      <div class="panel-head">
+        <div>
+          <h2>Aktif Pozisyon Fırsatları</h2>
+          <p>Trend devamı, göreceli güç ve risk yönetimi birlikte doğrulanan orta vadeli adaylar.</p>
+        </div>
+        <div class="panel-badge">2–10 işlem günü</div>
+      </div>
       <div id="overview-position" class="signal-grid"></div>
     </div>
+
     <div class="panel">
-      <div class="panel-title"><h2>Aktif Intraday Sinyalleri</h2><span>aynı gün yönetim</span></div>
+      <div class="panel-head">
+        <div>
+          <h2>Aktif Gün İçi Fırsatlar</h2>
+          <p>Hızlı izleme listesinden erken fiyat gücü, hacim ve teknik teyit alan adaylar.</p>
+        </div>
+        <div class="panel-badge">Aynı gün</div>
+      </div>
       <div id="overview-intraday" class="signal-grid"></div>
     </div>
   </section>
 
   <section id="view-position" class="hidden">
     <div class="panel">
-      <div class="panel-title"><h2>Bot / Position Engine</h2><span>KOMBINE_V3 · SUPER_KOMBINE_V3 · KAP_POSITION_V3</span></div>
+      <div class="panel-head">
+        <div>
+          <h2>Pozisyon Sinyalleri</h2>
+          <p>Kombine trend dönüşü, güçlü trend kırılımı ve KAP destekli pozisyon adayları.</p>
+        </div>
+        <div class="panel-badge">Bot</div>
+      </div>
       <div id="position-signals" class="signal-grid"></div>
     </div>
   </section>
 
   <section id="view-intraday" class="hidden">
     <div class="panel">
-      <div class="panel-title"><h2>Kanal / Intraday Engine</h2><span>Ignition · Momentum · KAP Event</span></div>
+      <div class="panel-head">
+        <div>
+          <h2>Gün İçi Sinyaller</h2>
+          <p>Erken hareket, gün içi devam ve KAP destekli hızlı işlem adayları.</p>
+        </div>
+        <div class="panel-badge">Kanal</div>
+      </div>
       <div id="intraday-signals" class="signal-grid"></div>
     </div>
   </section>
 
   <section id="view-performance" class="hidden">
     <div class="panel">
-      <div class="panel-title"><h2>30 Günlük Algoritma Performansı</h2><span>TP1 dokunması değil, kapanmış paper-trade sonucu</span></div>
+      <div class="panel-head">
+        <div>
+          <h2>30 Günlük Strateji Performansı</h2>
+          <p>Yalnız kapanmış sanal işlemler üzerinden hesaplanan gerçekleşmiş sonuçlar.</p>
+        </div>
+        <div class="panel-badge">Son 30 gün</div>
+      </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Scope</th><th>Algoritma</th><th>İşlem</th><th>Pozitif %</th><th>Ort. Sonuç</th><th>Ort. MFE</th><th>Ort. MAE</th><th>En İyi</th><th>En Kötü</th></tr></thead>
+          <thead><tr><th>Tür</th><th>Strateji</th><th>İşlem</th><th>Pozitif Oran</th><th>Ort. Sonuç</th><th>Ort. En İyi</th><th>Ort. En Kötü</th><th>En İyi</th><th>En Kötü</th></tr></thead>
           <tbody id="performance-body"></tbody>
         </table>
       </div>
@@ -142,10 +368,16 @@ th,td{padding:10px 8px;border-bottom:1px solid #172334;white-space:nowrap}
 
   <section id="view-closed" class="hidden">
     <div class="panel">
-      <div class="panel-title"><h2>Son Kapanan Paper İşlemler</h2><span>gerçek gözlenen fiyat akışı üzerinden</span></div>
+      <div class="panel-head">
+        <div>
+          <h2>Son Kapanan İşlemler</h2>
+          <p>Girişten kapanışa kadar izlenen sanal işlem geçmişi.</p>
+        </div>
+        <div class="panel-badge">Geçmiş</div>
+      </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Hisse</th><th>Scope</th><th>Algoritma</th><th>Giriş</th><th>Çıkış</th><th>Sonuç</th><th>MFE</th><th>MAE</th><th>Neden</th><th>Kapanış</th></tr></thead>
+          <thead><tr><th>Hisse</th><th>Tür</th><th>Strateji</th><th>Giriş</th><th>Çıkış</th><th>Sonuç</th><th>En İyi Hareket</th><th>En Ters Hareket</th><th>Kapanış Nedeni</th><th>Zaman</th></tr></thead>
           <tbody id="closed-body"></tbody>
         </table>
       </div>
@@ -154,142 +386,232 @@ th,td{padding:10px 8px;border-bottom:1px solid #172334;white-space:nowrap}
 
   <section id="view-kap" class="hidden">
     <div class="panel">
-      <div class="panel-title"><h2>KAP Kaynak Sağlığı</h2><span>resmi kaynaklar · doğrulama · reconciliation</span></div>
+      <div class="panel-head">
+        <div>
+          <h2>KAP Kaynak Sağlığı</h2>
+          <p>Resmî KAP kaynaklarının erişim ve doğrulama durumu.</p>
+        </div>
+        <div class="panel-badge">7/24 izleme</div>
+      </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Kaynak</th><th>Durum</th><th>Son Başarı</th><th>HTTP</th><th>Latency</th><th>Kayıt</th><th>Doğrulanan</th><th>Hata Serisi</th></tr></thead>
+          <thead><tr><th>Kaynak</th><th>Durum</th><th>Son Başarı</th><th>HTTP</th><th>Gecikme</th><th>Kayıt</th><th>Doğrulanan</th><th>Hata Serisi</th></tr></thead>
           <tbody id="kap-source-body"></tbody>
         </table>
       </div>
     </div>
+
     <div class="panel">
-      <div class="panel-title"><h2>Son Doğrulanmış KAP Bildirimleri</h2><span>resmi KAP id ve link ile</span></div>
+      <div class="panel-head">
+        <div>
+          <h2>Son Doğrulanmış KAP Bildirimleri</h2>
+          <p>Resmî KAP kimliğiyle doğrulanmış son olaylar.</p>
+        </div>
+        <div class="panel-badge">Doğrulanmış</div>
+      </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>ID</th><th>Hisse</th><th>Konu</th><th>Skor</th><th>Kaynak</th><th>Detail</th><th>Zaman</th></tr></thead>
+          <thead><tr><th>ID</th><th>Hisse</th><th>Konu</th><th>Önem</th><th>Kaynak</th><th>Detay</th><th>Zaman</th></tr></thead>
           <tbody id="kap-event-body"></tbody>
         </table>
       </div>
     </div>
   </section>
 
-  <div class="footer">Sinyaller algoritmik adaylardır. Dashboard performansı kalıcı paper-trade kayıtlarından hesaplar.</div>
+  <footer class="footer">
+    Sinyaller algoritmik adaylardır. Performans, sistemin kalıcı sanal işlem kayıtlarından hesaplanır.
+  </footer>
 </div>
 
 <script>
 const state={data:null,tab:"overview"};
 
-function esc(v){
-  return String(v??"-").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[m]));
-}
-function n(v,d=2){return (typeof v==="number" && isFinite(v))?v.toFixed(d):"-"}
-function pct(v){return (typeof v==="number" && isFinite(v))?((v>0?"+":"")+v.toFixed(2)+"%"):"-"}
+const algoLabels={
+  KOMBINE_V3:"Kombine Trend Dönüşü",
+  SUPER_KOMBINE_V3:"Güçlü Trend Kırılımı",
+  KAP_POSITION_V3:"KAP Destekli Pozisyon",
+  MOMENTUM_IGNITION_V3:"Erken İvme Başlangıcı",
+  INTRADAY_MOMENTUM_V3:"Gün İçi İvme Devamı",
+  KAP_EVENT_INTRADAY_V3:"KAP Destekli Gün İçi İvme",
+  EARLY_IGNITION_V3:"Erken Hareket Başlangıcı",
+  KAP_EARLY_IGNITION_V3:"KAP Destekli Erken Hareket"
+};
+function esc(v){return String(v??"-").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",""":"&quot;","'":"&#039;"}[m]))}
+function n(v,d=2){return (typeof v==="number"&&isFinite(v))?v.toFixed(d):"-"}
+function pct(v){return (typeof v==="number"&&isFinite(v))?((v>0?"+":"")+v.toFixed(2)+"%"):"-"}
 function cls(v){return typeof v==="number"?(v>0?"good":v<0?"bad":""):""}
+function algo(v){return algoLabels[v]||String(v||"-").replaceAll("_"," ")}
+function scopeLabel(v){return v==="POSITION"?"Pozisyon":v==="INTRADAY"?"Gün İçi":v||"-"}
+function regimeLabel(v){
+  return {RISK_ON:"Pozitif",RISK_OFF:"Temkinli",NEUTRAL:"Dengeli",UNKNOWN:"Belirsiz"}[v]||v||"Belirsiz";
+}
+function exitLabel(v){
+  return {STOP:"Koruyucu stop",TRAILING_STOP:"İz süren stop",TP3:"Ana hedef",TIME_EXIT:"Süre doldu"}[v]||v||"-";
+}
 function timeShort(v){
   if(!v)return "-";
   try{return new Date(v).toLocaleString("tr-TR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}catch(e){return esc(v)}
 }
 function activeOnly(rows){return (rows||[]).filter(x=>x.status==="OPEN")}
-
+function strength(score){
+  const x=Number(score||0);
+  if(x>=90)return {label:"Çok Güçlü",klass:"very-strong"};
+  if(x>=85)return {label:"Güçlü",klass:"strong"};
+  if(x>=80)return {label:"Yüksek",klass:"strong"};
+  return {label:"Seçici",klass:"selective"};
+}
+function rsiPhase(s){
+  const a=Number(s.rsi_15m), b=Number(s.rsi_4h), d=Number(s.rsi_1d);
+  if(Number.isFinite(a)&&Number.isFinite(b)){
+    if(a>=75&&b>=70)return "İleri aşama · şişkinlik riski";
+    if(a<60&&b>=50&&b<65)return "Yeni güçleniyor";
+    if(a>=60&&a<75&&b>=52&&b<70)return "Güçlü ve gelişen";
+    if(b<50)return "4 saatlik teyit bekleniyor";
+  }
+  if(Number.isFinite(b)&&Number.isFinite(d)){
+    if(b>=75&&d>=70)return "Ana trend ileri aşamada";
+    if(b>=52&&b<70&&d>=50&&d<68)return "Ana trend sağlıklı";
+    if(b<50&&d>=50)return "4 saatlik güç toparlanıyor";
+  }
+  return "RSI görünümü dengeli";
+}
+function emptyBlock(kind){
+  return `<div class="empty"><div><b>Aktif ${kind} sinyali yok</b><span>Sistem taramaya devam ediyor. Eşiklerin tamamı oluştuğunda sinyal burada otomatik görünecek.</span></div></div>`;
+}
 function signalCard(s,scope){
   const gain=s.live_gain_pct;
   const dataConf=s.data_confidence;
-  const reasons=(s.reasons||[]).slice(0,5).map(r=>`<li>${esc(r)}</li>`).join("");
+  const reasons=(s.reasons||[]).slice(0,4).map(r=>`<li>${esc(r)}</li>`).join("");
   const isIntra=scope==="INTRADAY";
+  const st=strength(s.score);
   return `
   <article class="signal ${isIntra?"intraday":""}">
     <div class="signal-head">
-      <div><div class="symbol">${esc(s.symbol)}</div><div class="algo">${esc(s.algorithm)}</div></div>
-      <div class="score">${esc(s.score??"-")} · ${esc(s.quality??"-")}</div>
+      <div>
+        <div class="symbol">${esc(String(s.symbol||"").replace(".IS",""))}</div>
+        <div class="strategy">${esc(algo(s.algorithm))} · ${esc(s.score??"-")}/100</div>
+      </div>
+      <div class="strength ${st.klass}">${st.label}</div>
     </div>
+
+    <div class="signal-story">
+      <b>RSI fazı: ${esc(rsiPhase(s))}</b>
+      <div>${isIntra?"Erken fiyat gücü, hacim ve gün içi yapı birlikte izleniyor.":"Ana trend, göreceli güç ve risk yapısı birlikte izleniyor."}</div>
+    </div>
+
     <div class="price-row">
       <div class="metric"><span>Giriş</span><b>${n(s.entry_price)}</b></div>
       <div class="metric"><span>Güncel</span><b>${n(s.current_price)}</b></div>
       <div class="metric"><span>Değişim</span><b class="${cls(gain)}">${pct(gain)}</b></div>
     </div>
+
     <div class="levels">
-      <div class="level">STOP<br><b>${n(s.trailing_stop??s.stop_loss)}</b></div>
-      <div class="level">TP1<br><b>${n(s.tp1)}</b></div>
-      <div class="level">TP2<br><b>${n(s.tp2)}</b></div>
-      <div class="level">TP3<br><b>${n(s.tp3)}</b></div>
+      <div class="level"><span>Stop</span><b>${n(s.trailing_stop??s.stop_loss)}</b></div>
+      <div class="level"><span>1. Hedef</span><b>${n(s.tp1)}</b></div>
+      <div class="level"><span>2. Hedef</span><b>${n(s.tp2)}</b></div>
+      <div class="level"><span>Ana Hedef</span><b>${n(s.tp3)}</b></div>
     </div>
+
     <div class="chips">
-      <span class="chip">RS %${n(s.rs_percentile,0)}</span>
-      <span class="chip ${dataConf>=80?"green":"amber"}">Data ${n(dataConf,0)}/100</span>
-      ${s.session_rvol!=null?`<span class="chip">RVOL ${n(s.session_rvol)}x</span>`:""}
-      ${isIntra && s.rsi_15m!=null?`<span class="chip">RSI15 ${n(s.rsi_15m)}</span>`:""}
-      ${s.rsi_4h!=null?`<span class="chip">RSI4S ${n(s.rsi_4h)}</span>`:""}
-      ${!isIntra && s.rsi_1d!=null?`<span class="chip">RSI1G ${n(s.rsi_1d)}</span>`:""}
-      ${s.tp1_hit?`<span class="chip green">TP1</span>`:""}
-      ${s.tp2_hit?`<span class="chip green">TP2</span>`:""}
-      <span class="chip">${esc(s.market_regime??"-")}</span>
+      <span class="chip">Göreceli güç %${n(s.rs_percentile,0)}</span>
+      ${s.session_rvol!=null?`<span class="chip">Göreli hacim ${n(s.session_rvol)}x</span>`:""}
+      ${isIntra&&s.rsi_15m!=null?`<span class="chip">RSI 15dk ${n(s.rsi_15m)}</span>`:""}
+      ${s.rsi_4h!=null?`<span class="chip">RSI 4s ${n(s.rsi_4h)}</span>`:""}
+      ${!isIntra&&s.rsi_1d!=null?`<span class="chip">RSI günlük ${n(s.rsi_1d)}</span>`:""}
+      ${s.tp1_hit?`<span class="chip green">1. hedef görüldü</span>`:""}
+      ${s.tp2_hit?`<span class="chip green">2. hedef görüldü</span>`:""}
+      <span class="chip">${esc(regimeLabel(s.market_regime))}</span>
+      <span class="chip ${dataConf>=80?"green":"amber"}">Veri güveni ${n(dataConf,0)}/100</span>
     </div>
+
     ${reasons?`<ul class="reasons">${reasons}</ul>`:""}
-    <div class="chips">
-      <span class="chip">MFE ${pct(s.mfe_pct)}</span>
-      <span class="chip">MAE ${pct(s.mae_pct)}</span>
-      <span class="chip">${timeShort(s.created_at)}</span>
-    </div>
+    <div class="meta"><span>En iyi hareket: ${pct(s.mfe_pct)} · En ters: ${pct(s.mae_pct)}</span><span>${timeShort(s.created_at)}</span></div>
   </article>`;
 }
 function renderCards(id,rows,scope,limit){
   const el=document.getElementById(id);
   const data=(rows||[]).slice(0,limit||999);
-  el.innerHTML=data.length?data.map(s=>signalCard(s,scope)).join(""):'<div class="empty">Henüz kayıt yok.</div>';
+  el.innerHTML=data.length?data.map(s=>signalCard(s,scope)).join(""):emptyBlock(scope==="POSITION"?"pozisyon":"gün içi");
 }
 function renderPerformance(p){
   const rows=p?.algorithms||[];
   document.getElementById("performance-body").innerHTML=rows.length?rows.map(r=>`
-    <tr><td>${esc(r.scope)}</td><td>${esc(r.algorithm)}</td><td>${esc(r.closed_trades)}</td>
+    <tr><td>${esc(scopeLabel(r.scope))}</td><td>${esc(algo(r.algorithm))}</td><td>${esc(r.closed_trades)}</td>
     <td>${n(r.win_rate_pct,1)}%</td><td class="${cls(r.avg_result_pct)}">${pct(r.avg_result_pct)}</td>
     <td>${pct(r.avg_mfe_pct)}</td><td>${pct(r.avg_mae_pct)}</td>
     <td class="good">${pct(r.best_result_pct)}</td><td class="bad">${pct(r.worst_result_pct)}</td></tr>`).join("")
-    :'<tr><td colspan="9" class="empty">Kapanmış işlem istatistiği henüz oluşmadı.</td></tr>';
+    :'<tr><td colspan="9" class="empty">Henüz kapanmış işlem istatistiği oluşmadı.</td></tr>';
 }
 function renderClosed(rows){
   document.getElementById("closed-body").innerHTML=(rows||[]).length?(rows||[]).map(r=>`
-  <tr><td><b>${esc(r.symbol)}</b></td><td>${esc(r.scope)}</td><td>${esc(r.algorithm)}</td>
+  <tr><td><b>${esc(String(r.symbol||"").replace(".IS",""))}</b></td><td>${esc(scopeLabel(r.scope))}</td><td>${esc(algo(r.algorithm))}</td>
   <td>${n(r.entry_price)}</td><td>${n(r.exit_price)}</td><td class="${cls(r.result_pct)}">${pct(r.result_pct)}</td>
-  <td>${pct(r.mfe_pct)}</td><td>${pct(r.mae_pct)}</td><td>${esc(r.exit_reason)}</td><td>${timeShort(r.closed_at)}</td></tr>`).join("")
-  :'<tr><td colspan="10" class="empty">Kapanan paper trade yok.</td></tr>';
+  <td>${pct(r.mfe_pct)}</td><td>${pct(r.mae_pct)}</td><td>${esc(exitLabel(r.exit_reason))}</td><td>${timeShort(r.closed_at)}</td></tr>`).join("")
+  :'<tr><td colspan="10" class="empty">Henüz kapanan işlem yok.</td></tr>';
 }
-
 function renderKap(kap){
   const sources=kap?.sources||[];
   document.getElementById("kap-source-body").innerHTML=sources.length?sources.map(r=>`
-    <tr><td><b>${esc(r.source)}</b></td><td>${esc(r.status)}</td><td>${timeShort(r.last_success)}</td>
+    <tr><td><b>${esc(r.source)}</b></td><td>${esc(String(r.status||"-").replace("healthy","Sağlıklı").replace("degraded","Kontrol").replace("error","Hata"))}</td><td>${timeShort(r.last_success)}</td>
     <td>${esc(r.http_status??"-")}</td><td>${n(r.latency_ms,0)} ms</td><td>${esc(r.entry_count??0)}</td>
     <td>${esc(r.verified_count??0)}</td><td>${esc(r.consecutive_failures??0)}</td></tr>`).join("")
-    :'<tr><td colspan="8" class="empty">KAP kaynak health kaydı henüz oluşmadı.</td></tr>';
+    :'<tr><td colspan="8" class="empty">KAP kaynak sağlık kaydı henüz oluşmadı.</td></tr>';
 
   const events=kap?.recent||[];
   document.getElementById("kap-event-body").innerHTML=events.length?events.map(r=>`
-    <tr><td>${esc(r.kap_id)}</td><td><b>${esc(r.symbol)}</b></td><td>${esc(r.subject)}</td>
-    <td>${esc(r.score)}</td><td>${esc(r.discovery_source)}</td><td>${r.detail_verified?"✓":"-"}</td>
+    <tr><td>${esc(r.kap_id)}</td><td><b>${esc(String(r.symbol||"").replace(".IS",""))}</b></td><td>${esc(r.subject)}</td>
+    <td>${esc(r.score)}</td><td>${esc(r.discovery_source)}</td><td>${r.detail_verified?"Doğrulandı":"-"}</td>
     <td>${timeShort(r.event_time)}</td></tr>`).join("")
     :'<tr><td colspan="7" class="empty">Doğrulanmış KAP kaydı henüz yok.</td></tr>';
 }
 function render(data){
   state.data=data;
   const rt=data.runtime||{};
-  document.getElementById("server-time").textContent=data.server_time||"-";
-  document.getElementById("last-refresh").textContent="Son yenileme: "+new Date().toLocaleTimeString("tr-TR");
-
-  const m=document.getElementById("market-status");
-  m.textContent=rt.market_open?"AÇIK":"KAPALI"; m.className="status-value "+(rt.market_open?"good":"warn");
-  const w=document.getElementById("worker-status");
-  w.textContent=rt.worker_active?"AKTİF":"PASİF"; w.className="status-value "+(rt.worker_active?"good":"bad");
-  const rg=document.getElementById("regime");
-  rg.textContent=rt.market_regime||"UNKNOWN";
-  rg.className="status-value "+(rt.market_regime==="RISK_ON"?"good":rt.market_regime==="RISK_OFF"?"bad":"warn");
-  document.getElementById("breadth").textContent=rt.breadth_intraday!=null?Math.round(rt.breadth_intraday*100)+"%":"-";
-  document.getElementById("universe").textContent=rt.universe_size||0;
-  document.getElementById("source").textContent=rt.data_source||"-";
-
+  const uni=data.universe||{};
   const kap=data.kap||{};
+
+  document.getElementById("server-time").textContent="Sunucu "+(data.server_time||"-");
+  document.getElementById("last-refresh").textContent="Son yenileme "+new Date().toLocaleTimeString("tr-TR",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
+
+  const market=document.getElementById("market-status");
+  market.textContent=rt.market_open?"Açık":"Kapalı";
+  market.className=rt.market_open?"good":"warn";
+
+  const worker=document.getElementById("worker-status");
+  worker.textContent=rt.worker_active?"Aktif":"Pasif";
+  worker.className=rt.worker_active?"good":"bad";
+
+  const regime=document.getElementById("regime");
+  regime.textContent=regimeLabel(rt.market_regime);
+  regime.className=rt.market_regime==="RISK_ON"?"good":rt.market_regime==="RISK_OFF"?"bad":"warn";
+
   const ks=document.getElementById("kap-status");
-  ks.textContent=(kap.overall||"UNKNOWN").toUpperCase()+" · "+(kap.verified_events_24h||0);
-  ks.className="status-value "+(kap.overall==="healthy"?"good":kap.overall==="degraded"?"warn":"bad");
+  const kapHealthy=kap.overall==="healthy";
+  ks.textContent=kapHealthy?"Sağlıklı":kap.overall==="degraded"?"Kontrol":"Hata";
+  ks.className=kapHealthy?"good":kap.overall==="degraded"?"warn":"bad";
+
+  const activeUniverse=uni.active_count||rt.universe_size||0;
+  document.getElementById("universe").textContent=activeUniverse||"-";
+  document.getElementById("fast-watchlist").textContent=uni.fast_watchlist_count||"-";
+  document.getElementById("breadth").textContent=rt.breadth_intraday!=null?Math.round(rt.breadth_intraday*100)+"%":"-";
+  document.getElementById("source").textContent=rt.data_source||uni.source||"-";
+
+  const overall=document.getElementById("overall-status");
+  const heroTitle=document.getElementById("hero-title");
+  const heroSub=document.getElementById("hero-sub");
+  if(rt.worker_active&&kapHealthy){
+    overall.textContent="HAZIR";
+    overall.className="good";
+    heroTitle.textContent=rt.market_open?"Canlı tarama aktif":"Sistem hazır, piyasa açılışı bekleniyor";
+    heroSub.textContent=rt.market_open
+      ?`${activeUniverse||"-"} hisse izleniyor; güçlü adaylar hızlı tarama katmanında takip ediliyor.`
+      :`Tarayıcı ve KAP izleme aktif. Son dinamik evrende ${activeUniverse||"-"} hisse hazır.`;
+  }else{
+    overall.textContent="KONTROL";
+    overall.className="warn";
+    heroTitle.textContent="Bir sistem bileşeni kontrol bekliyor";
+    heroSub.textContent="Tarayıcı ve KAP durumunu sağdaki sistem kartından kontrol edin.";
+  }
 
   const posOpen=activeOnly(data.position_signals);
   const intraOpen=activeOnly(data.intraday_signals);
@@ -302,8 +624,8 @@ function render(data){
   document.getElementById("kpi-closed").textContent=closed;
   document.getElementById("kpi-win").textContent=closed?Math.round(wins/closed*100)+"%":"-";
 
-  renderCards("overview-position",posOpen,"POSITION",6);
-  renderCards("overview-intraday",intraOpen,"INTRADAY",6);
+  renderCards("overview-position",posOpen,"POSITION",4);
+  renderCards("overview-intraday",intraOpen,"INTRADAY",4);
   renderCards("position-signals",data.position_signals,"POSITION");
   renderCards("intraday-signals",data.intraday_signals,"INTRADAY");
   renderPerformance(data.performance);
@@ -319,9 +641,11 @@ async function load(){
     if(!ct.includes("application/json")){window.location="/login";return}
     render(await res.json());
   }catch(err){
-    document.getElementById("worker-status").textContent="BAĞLANTI HATASI";
-    document.getElementById("worker-status").className="status-value bad";
-    document.getElementById("last-refresh").textContent=String(err);
+    const worker=document.getElementById("worker-status");
+    worker.textContent="Bağlantı Hatası";worker.className="bad";
+    document.getElementById("overall-status").textContent="BAĞLANTI";
+    document.getElementById("overall-status").className="bad";
+    document.getElementById("last-refresh").textContent="Veri alınamadı";
   }
 }
 document.querySelectorAll(".tab").forEach(btn=>btn.addEventListener("click",()=>{
