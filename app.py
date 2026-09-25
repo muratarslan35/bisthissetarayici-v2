@@ -683,6 +683,17 @@ def session_valid(username):
         return False
     return row["active_session_id"] == session.get("sid")
 
+def is_admin_user(username):
+    if not username:
+        return False
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT is_admin FROM users WHERE username=?", (username,))
+    row = cur.fetchone()
+    conn.close()
+    return bool(row and row["is_admin"])
+
+
 # ======================================================
 # SECURITY
 # ======================================================
@@ -699,7 +710,7 @@ def security():
         return
 
     if request.path.startswith(f"/{ADMIN_PANEL_PATH}") or request.path.startswith("/admin"):
-        if session.get("user") != "admin":
+        if not is_admin_user(session.get("user")):
             return "Unauthorized", 403
         return
     if "user" not in session:
@@ -719,7 +730,7 @@ def security():
 def admin_required(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
-        if session.get("user") != "admin":
+        if not is_admin_user(session.get("user")):
             return "Unauthorized", 403
         return f(*args, **kwargs)
     return wrapper
