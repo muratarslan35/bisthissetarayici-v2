@@ -974,6 +974,18 @@ def format_v3_signal_message(signal):
         lines.append(f"📦 Session RVOL: {signal.get('session_rvol')}x")
     if signal.get("session_vwap") is not None:
         lines.append(f"〽️ Session VWAP: {signal.get('session_vwap')}")
+
+    if scope == "INTRADAY":
+        if signal.get("rsi_15m") is not None:
+            lines.append(f"📐 RSI(14, 15dk): {signal.get('rsi_15m')}")
+        if signal.get("rsi_4h") is not None:
+            lines.append(f"🧭 RSI(14, 4s): {signal.get('rsi_4h')}")
+    else:
+        if signal.get("rsi_4h") is not None:
+            lines.append(f"🧭 RSI(14, 4s): {signal.get('rsi_4h')}")
+        if signal.get("rsi_1d") is not None:
+            lines.append(f"📐 RSI(14, 1G): {signal.get('rsi_1d')}")
+
     if signal.get("fast_change_60s_pct") is not None:
         lines.append(f"⚡ 60 sn ivme: %{signal.get('fast_change_60s_pct')}")
     if signal.get("holding_horizon"):
