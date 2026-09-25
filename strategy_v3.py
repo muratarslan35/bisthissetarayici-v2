@@ -91,6 +91,34 @@ def _atr(df, period=14):
     return _num(value)
 
 
+def _rsi_wilder(series, period=14):
+    if series is None or len(series) < period + 2:
+        return None
+    values = pd.to_numeric(series, errors="coerce").dropna().astype(float)
+    if len(values) < period + 2:
+        return None
+
+    delta = values.diff()
+    gains = delta.clip(lower=0.0)
+    losses = -delta.clip(upper=0.0)
+
+    avg_gain = gains.iloc[1:period + 1].mean()
+    avg_loss = losses.iloc[1:period + 1].mean()
+
+    if math.isnan(avg_gain) or math.isnan(avg_loss):
+        return None
+
+    for i in range(period + 1, len(values)):
+        avg_gain = ((avg_gain * (period - 1)) + gains.iloc[i]) / period
+        avg_loss = ((avg_loss * (period - 1)) + losses.iloc[i]) / period
+
+    if avg_loss == 0:
+        return 100.0 if avg_gain > 0 else 50.0
+
+    rs = avg_gain / avg_loss
+    return round(100.0 - (100.0 / (1.0 + rs)), 2)
+
+
 def _turnover_20d(df):
     if df is None or len(df) < 20:
         return 0.0
