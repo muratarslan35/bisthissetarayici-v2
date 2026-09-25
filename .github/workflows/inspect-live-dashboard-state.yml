@@ -1,0 +1,66 @@
+name: Inspect Live Dashboard State
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/inspect-live-dashboard-state.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+
+      - name: Inspect live dashboard backend
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            ubuntu@89.168.99.141 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          cd /home/ubuntu/bistbot
+          venv/bin/python - <<'PY'
+          import json
+          from dashboard_store import get_dashboard_data
+          from universe_manager import universe_status
+
+          d=get_dashboard_data()
+          rt=d.get("runtime") or {}
+          kap=d.get("kap") or {}
+          recent=kap.get("recent") or []
+          print("WORKER_ACTIVE=" + str(rt.get("worker_active")))
+          print("MARKET_OPEN=" + str(rt.get("market_open")))
+          print("MARKET_REGIME=" + str(rt.get("market_regime")))
+          print("UNIVERSE_SIZE=" + str(rt.get("universe_size")))
+          print("DATA_SOURCE=" + str(rt.get("data_source")))
+          print("HEARTBEAT=" + str(rt.get("worker_heartbeat")))
+          print("KAP_OVERALL=" + str(kap.get("overall")))
+          print("KAP_VERIFIED_24H=" + str(kap.get("verified_events_24h")))
+          print("KAP_RECENT_COUNT=" + str(len(recent)))
+          for i,row in enumerate(recent[:5],1):
+              print("KAP_%d=%s|%s|%s" % (
+                  i,
+                  row.get("symbol"),
+                  row.get("subject"),
+                  row.get("event_time"),
+              ))
+          print("UNIVERSE=" + json.dumps(universe_status(), ensure_ascii=False))
+          PY
+
+          echo "WEB=$(sudo systemctl is-active bist-trading-web.service)"
+          echo "WORKER=$(sudo systemctl is-active bist-trading-worker.service)"
+          echo "LIVE_DASHBOARD_BACKEND=PASS"
+          REMOTE
