@@ -31,6 +31,17 @@ jobs:
           bash -n deploy/install_shared_host_services.sh
           bash -n scripts/check_shared_host_isolation.sh
 
+      - name: Validate dashboard JavaScript
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          html=Path("templates/dashboard.html").read_text(encoding="utf-8")
+          start=html.index("<script>")+len("<script>")
+          end=html.index("</script>", start)
+          Path("/tmp/dashboard.js").write_text(html[start:end], encoding="utf-8")
+          PY
+          node --check /tmp/dashboard.js
+
       - name: Run tests
         run: python -m unittest discover -s tests -v
 
