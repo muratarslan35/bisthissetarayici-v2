@@ -439,6 +439,14 @@ def _base_signal(item, scope, algo, score, reasons, ctx, rs_pct, risk):
     if price is None:
         return None
 
+    d15 = _closed(_frame(item, "15m"), intraday=True)
+    d4 = _closed(_frame(item, "4h"), intraday=True)
+    d1 = _closed(_frame(item, "1d"), intraday=False)
+
+    rsi_15m = _rsi_wilder(d15["Close"], 14) if d15 is not None else None
+    rsi_4h = _rsi_wilder(d4["Close"], 14) if d4 is not None else None
+    rsi_1d = _rsi_wilder(d1["Close"], 14) if d1 is not None else None
+
     return {
         "symbol": item.get("symbol"),
         "signal_scope": scope,
@@ -454,6 +462,9 @@ def _base_signal(item, scope, algo, score, reasons, ctx, rs_pct, risk):
         "market_regime": ctx.get("regime"),
         "market_breadth": ctx.get("breadth_intraday"),
         "relative_strength_percentile": round((rs_pct or 0.0) * 100, 1),
+        "rsi_15m": rsi_15m,
+        "rsi_4h": rsi_4h,
+        "rsi_1d": rsi_1d,
         "data_confidence": item.get("data_confidence"),
         "data_age_minutes": item.get("data_age_minutes"),
         "data_source": item.get("data_source"),
