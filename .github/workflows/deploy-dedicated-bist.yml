@@ -47,9 +47,10 @@ jobs:
           echo "LIVE_COMMIT=$(git rev-parse HEAD)"
 
           echo "=== PYTHON ENV ==="
-          if [ ! -x venv/bin/python ]; then
-            python3 -m venv venv
-          fi
+          # Build the runtime environment from scratch. This avoids carrying
+          # partially deleted/corrupted site-packages across deploys.
+          rm -rf venv
+          python3 -m venv venv
           venv/bin/python -m pip install -q --upgrade pip setuptools wheel
           venv/bin/python -m pip install -q -r requirements.txt
           venv/bin/python -m compileall -q .
