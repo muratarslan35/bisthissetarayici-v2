@@ -1,0 +1,141 @@
+name: Verify Live BIST Bot Messaging
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/verify-live-bist-bot.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment: production
+    steps:
+      - name: Configure dedicated BIST SSH
+        env:
+          KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+
+      - name: Verify scanner and Telegram delivery
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=15 ubuntu@89.168.99.141 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          cd /home/ubuntu/bistbot
+
+          echo "=== SERVICES ==="
+          echo "BIST_WEB=$(sudo systemctl is-active bist-trading-web.service)"
+          echo "BIST_WORKER=$(sudo systemctl is-active bist-trading-worker.service)"
+          test "$(sudo systemctl is-active bist-trading-web.service)" = "active"
+          test "$(sudo systemctl is-active bist-trading-worker.service)" = "active"
+
+          echo "=== HEALTH ==="
+          curl --fail --silent --show-error http://127.0.0.1:5000/health >/tmp/bist-health.json
+          python3 - <<'PY'
+          import json
+          with open('/tmp/bist-health.json', encoding='utf-8') as f:
+              d=json.load(f)
+          print("HEALTH_HTTP=PASS")
+          print("MARKET_OPEN=", d.get("market_open"))
+          print("KAP_STATUS=", d.get("kap_status"))
+          PY
+
+          echo "=== WORKER RECENT ACTIVITY ==="
+          sudo journalctl -u bist-trading-worker.service --since "10 minutes ago" --no-pager \
+            | grep -E 'BIST scanner worker starting|Döngü:|MARKET AÇIK|MARKET KAPALI|RESOURCE YIELD|Scanner genel hata|V3 .* hata' \
+            | tail -40 || true
+
+          echo "=== TELEGRAM API + DELIVERY ==="
+          /home/ubuntu/bistbot/venv/bin/python - <<'PY'
+          import os, sqlite3, requests
+          from dotenv import load_dotenv
+
+          load_dotenv('/home/ubuntu/bistbot/.env')
+          token=os.getenv('TELEGRAM_BOT_TOKEN')
+          channel=os.getenv('TELEGRAM_CHANNEL_ID')
+          admin=os.getenv('ADMIN_CHAT_ID')
+
+          assert token, 'TELEGRAM_BOT_TOKEN missing'
+          assert channel, 'TELEGRAM_CHANNEL_ID missing'
+          print('TELEGRAM_TOKEN_PRESENT=PASS')
+          print('CHANNEL_ID_PRESENT=PASS')
+          print('ADMIN_CHAT_ID_PRESENT=' + ('PASS' if admin else 'MISSING'))
+
+          base=f'https://api.telegram.org/bot{token}'
+
+          r=requests.get(base+'/getMe', timeout=10)
+          d=r.json()
+          assert r.ok and d.get('ok'), f'getMe failed: HTTP {r.status_code}'
+          bot=d['result']
+          print('TELEGRAM_GETME=PASS')
+          print('BOT_USERNAME=@' + str(bot.get('username','')))
+
+          r=requests.post(base+'/getChat', json={'chat_id':channel}, timeout=10)
+          d=r.json()
+          assert r.ok and d.get('ok'), f'getChat channel failed: HTTP {r.status_code}, {d.get("description")}'
+          chat=d['result']
+          print('CHANNEL_ACCESS=PASS')
+          print('CHANNEL_TYPE=' + str(chat.get('type','unknown')))
+
+          test_text='🧪 BIST bot canlı bağlantı testi — dedicated sunucu aktif. Bu bir sistem test mesajıdır.'
+          r=requests.post(base+'/sendMessage', json={
+              'chat_id': channel,
+              'text': test_text,
+              'disable_web_page_preview': True
+          }, timeout=10)
+          d=r.json()
+          assert r.ok and d.get('ok'), f'channel send failed: HTTP {r.status_code}, {d.get("description")}'
+          print('CHANNEL_TEST_MESSAGE=DELIVERED')
+          print('CHANNEL_MESSAGE_ID=' + str(d['result'].get('message_id')))
+
+          if admin:
+              r=requests.post(base+'/sendMessage', json={
+                  'chat_id': admin,
+                  'text': '🧪 BIST bot yönetici test mesajı — dedicated sunucu ve Telegram gönderimi aktif.'
+              }, timeout=10)
+              d=r.json()
+              assert r.ok and d.get('ok'), f'admin send failed: HTTP {r.status_code}, {d.get("description")}'
+              print('ADMIN_TEST_MESSAGE=DELIVERED')
+              print('ADMIN_MESSAGE_ID=' + str(d['result'].get('message_id')))
+
+          db='/home/ubuntu/bistbot/system.db'
+          con=sqlite3.connect(db)
+          cur=con.cursor()
+          try:
+              active=cur.execute(
+                  "SELECT COUNT(*) FROM users WHERE is_active=1 AND telegram_chat_id IS NOT NULL"
+              ).fetchone()[0]
+              print('ACTIVE_TELEGRAM_USERS=' + str(active))
+          finally:
+              con.close()
+          PY
+
+          echo "=== SIGNAL ROUTING CONTRACT ==="
+          /home/ubuntu/bistbot/venv/bin/python - <<'PY'
+          from pathlib import Path
+          t=Path('/home/ubuntu/bistbot/app.py').read_text(encoding='utf-8')
+          required=[
+              'if record_signal(sig):',
+              'broadcast_signal(format_v3_signal_message(sig))',
+              'send_to_channel(format_v3_signal_message(sig))',
+              'evaluate_position_signals(',
+              'evaluate_intraday_signals(',
+          ]
+          missing=[x for x in required if x not in t]
+          assert not missing, 'Signal routing contract missing: ' + repr(missing)
+          print('V3_SIGNAL_ROUTING_CONTRACT=PASS')
+          PY
+
+          echo "LIVE_BIST_BOT_MESSAGING=PASS"
+          REMOTE
