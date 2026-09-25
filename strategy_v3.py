@@ -533,7 +533,7 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
         reasons = [
             "1D EMA50 > EMA200 ve EMA50 eğimi yukarı",
             "4H ana trend yukarı",
-            "1H momentum yeniden yukarı",
+            "1 saatlik fiyat ivmesi yeniden yukarı",
             f"20 günlük göreceli güç yüzdelik: %{round(rs_pct * 100)}",
         ]
         if volume_ratio >= 1.15:
@@ -541,7 +541,7 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
             reasons.append(f"Günlük hacim genişlemesi {volume_ratio:.2f}x")
         if ctx.get("regime") == "RISK_ON":
             score += 7
-            reasons.append("Piyasa rejimi RISK_ON")
+            reasons.append("Piyasa genel görünümü pozitif")
         elif ctx.get("regime") == "RISK_OFF":
             score -= 8
 
@@ -563,9 +563,9 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
             score = 66 + rs_pct * 20
             reasons = [
                 "20 günlük yapısal direnç kırılımı",
-                "1D ve 4H trend uyumlu",
+                "Günlük ve 4 saatlik ana eğilim uyumlu",
                 f"20 günlük göreceli güç yüzdelik: %{round(rs_pct * 100)}",
-                f"Kırılım uzaması {extension_atr:.2f} ATR",
+                f"Kırılım sonrası uzaklık {extension_atr:.2f} ATR",
             ]
             if volume_ratio >= 1.25:
                 score += 8
@@ -591,7 +591,7 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
         score = 72 + rs_pct * 16 + min(8, max(0, _num(kap.get("score"), 0.0) or 0.0))
         reasons = [
             "Taze KAP olayı",
-            "1D/4H trend olayı destekliyor",
+            "Günlük ve 4 saatlik ana eğilim KAP hareketini destekliyor",
             f"20 günlük göreceli güç yüzdelik: %{round(rs_pct * 100)}",
         ]
         risk = _risk_levels(price, atr_d, _num(d1["Low"].tail(8).min()), position=True)
@@ -685,9 +685,9 @@ def evaluate_intraday_signals(item, ctx, kap_cache=None):
         reasons = [
             "Volatilite sıkışması sonrası fiyat ivmesi artıyor",
             f"Intraday göreceli güç yüzdelik: %{round(rs_pct * 100)}",
-            f"Session RVOL: {srvol:.2f}x",
-            f"Breakout mesafesi: %{breakout_distance * 100:.2f}",
-            "Fiyat session VWAP üzerinde",
+            f"Seans göreli hacmi: {srvol:.2f}x",
+            f"Yapısal kırılıma mesafe: %{breakout_distance * 100:.2f}",
+            "Fiyat seans ortalama maliyetinin (VWAP) üzerinde",
         ]
 
         risk = _risk_levels(price, atr15, max(vwap, breakout - atr15 * 0.5), position=False)
@@ -727,10 +727,10 @@ def evaluate_intraday_signals(item, ctx, kap_cache=None):
 
         reasons = [
             "15m EMA20 > EMA50",
-            "Fiyat session VWAP üzerinde",
+            "Fiyat seans ortalama maliyetinin (VWAP) üzerinde",
             f"Intraday göreceli güç yüzdelik: %{round(rs_pct * 100)}",
-            f"Session RVOL: {srvol:.2f}x",
-            "Yakın yapısal breakout/continuation",
+            f"Seans göreli hacmi: {srvol:.2f}x",
+            "Yakın yapısal kırılım ve devam hareketi",
         ]
 
         risk = _risk_levels(price, atr15, max(vwap, breakout - atr15 * 0.65), position=False)
@@ -760,8 +760,8 @@ def evaluate_intraday_signals(item, ctx, kap_cache=None):
         reasons = [
             "Taze KAP olayı + teknik teyit",
             f"Intraday göreceli güç yüzdelik: %{round(rs_pct * 100)}",
-            "Fiyat session VWAP üzerinde",
-            f"Session RVOL: {srvol:.2f}x",
+            "Fiyat seans ortalama maliyetinin (VWAP) üzerinde",
+            f"Seans göreli hacmi: {srvol:.2f}x",
         ]
 
         risk = _risk_levels(price, atr15, max(vwap, breakout - atr15 * 0.6), position=False)
@@ -891,7 +891,7 @@ def evaluate_fast_entry_signal(item, ctx, kap_cache=None):
     score += min(6.0, max(0.0, day_change * 1.2))
 
     reasons = [
-        "Hızlı izleme listesinde erken momentum",
+        "Hızlı izleme listesinde erken fiyat ivmesi",
         f"60 sn fiyat ivmesi %{round(ch60, 2)}",
         f"Anlık RVOL {round(fast_rvol, 2)}x",
         f"Intraday göreceli güç yüzdelik: %{round(rs_pct * 100)}",
@@ -953,9 +953,9 @@ def _algorithm_tr(algo):
         "KOMBINE_V3": "Kombine Trend Dönüşü",
         "SUPER_KOMBINE_V3": "Güçlü Trend Kırılımı",
         "KAP_POSITION_V3": "KAP Destekli Pozisyon",
-        "MOMENTUM_IGNITION_V3": "Erken Momentum Başlangıcı",
-        "INTRADAY_MOMENTUM_V3": "Gün İçi Momentum Devamı",
-        "KAP_EVENT_INTRADAY_V3": "KAP Destekli Gün İçi Momentum",
+        "MOMENTUM_IGNITION_V3": "Erken İvme Başlangıcı",
+        "INTRADAY_MOMENTUM_V3": "Gün İçi İvme Devamı",
+        "KAP_EVENT_INTRADAY_V3": "KAP Destekli Gün İçi İvme",
         "EARLY_IGNITION_V3": "Erken Hareket Başlangıcı",
         "KAP_EARLY_IGNITION_V3": "KAP Destekli Erken Hareket",
     }
@@ -988,23 +988,23 @@ def _rsi_story(signal):
 
     if r15 is not None and r4 is not None:
         if r15 >= 75 and r4 >= 70:
-            return "Kısa ve orta vadeli momentum ileri aşamada; şişkinlik riski yükselmiş."
+            return "Kısa ve orta vadeli fiyat gücü ileri aşamada; şişkinlik riski yükselmiş."
         if r15 >= 60 and 52 <= r4 < 70:
-            return "Kısa vadeli momentum güçlü, 4 saatlik trend de destekliyor; hareket olgunlaşıyor."
+            return "Kısa vadeli fiyat gücü yüksek, 4 saatlik eğilim de destekliyor; hareket olgunlaşıyor."
         if r15 < 60 and 50 <= r4 < 65:
-            return "Momentum yeni güçleniyor; 4 saatlik yapı henüz aşırı bölgeye taşınmamış."
+            return "Fiyat gücü yeni artıyor; 4 saatlik yapı henüz aşırı bölgeye taşınmamış."
         if r4 < 50:
-            return "Kısa vadeli hareket olsa da 4 saatlik ana momentum henüz tam teyit vermiyor."
+            return "Kısa vadeli hareket olsa da 4 saatlik ana güç henüz tam teyit vermiyor."
 
     if r4 is not None and r1 is not None:
         if r4 >= 75 and r1 >= 70:
-            return "4 saatlik ve günlük momentum yüksek; trend güçlü ancak geç kalma/şişkinlik riski artmış."
+            return "4 saatlik ve günlük fiyat gücü yüksek; ana eğilim güçlü ancak geç kalma/şişkinlik riski artmış."
         if 52 <= r4 < 70 and 50 <= r1 < 68:
-            return "4 saatlik ve günlük RSI uyumlu; ana trend güçlü fakat aşırı bölgeye taşınmamış."
+            return "4 saatlik ve günlük RSI uyumlu; ana eğilim güçlü fakat aşırı bölgeye taşınmamış."
         if r4 < 50 <= r1:
-            return "Günlük yapı korunuyor ancak 4 saatlik momentum yeniden güçlenme aşamasında."
+            return "Günlük yapı korunuyor ancak 4 saatlik fiyat gücü yeniden artış aşamasında."
 
-    return "RSI görünümü tek başına karar üretmez; hacim, trend, kırılım ve göreceli güç ile birlikte değerlendiriliyor."
+    return "RSI görünümü tek başına karar üretmez; hacim, ana eğilim, kırılım ve göreceli güç ile birlikte değerlendiriliyor."
 
 
 def format_v3_signal_message(signal):
@@ -1017,10 +1017,10 @@ def format_v3_signal_message(signal):
 
     if scope == "POSITION":
         header = "📌 <b>POZİSYON / SWING SİNYALİ</b>"
-        meaning = "2–10 işlem günlük ana trend fırsatı; kısa hareketten çok trend devamı ve yapısal güç aranıyor."
+        meaning = "2–10 işlem günlük ana eğilim fırsatı; kısa sıçramadan çok kalıcı güç ve yapısal devam aranıyor."
     else:
         header = "⚡ <b>GÜN İÇİ ERKEN HAREKET SİNYALİ</b>"
-        meaning = "Hacim ve fiyat ivmesi yeni güçlenirken, hareket aşırı uzamadan erken yakalama amacı taşıyor."
+        meaning = "Hacim ve fiyat gücü yeni artarken, hareket aşırı uzamadan erken yakalama amacı taşıyor."
 
     lines = [
         header,
@@ -1076,6 +1076,6 @@ def format_v3_signal_message(signal):
 
     lines.extend([
         "",
-        "⚠️ <b>Not:</b> Bu bildirim algoritmik piyasa taramasıdır. RSI tek başına sinyal üretmez; fiyat, hacim, trend, kırılım ve risk koşulları birlikte doğrulanır.",
+        "⚠️ <b>Not:</b> Bu bildirim algoritmik piyasa taramasıdır. RSI tek başına sinyal üretmez; fiyat, hacim, ana eğilim, kırılım ve risk koşulları birlikte doğrulanır.",
     ])
     return "\n".join(lines)
