@@ -948,60 +948,134 @@ def evaluate_fast_entry_signal(item, ctx, kap_cache=None):
     return [sig]
 
 
+def _algorithm_tr(algo):
+    labels = {
+        "KOMBINE_V3": "Kombine Trend Dönüşü",
+        "SUPER_KOMBINE_V3": "Güçlü Trend Kırılımı",
+        "KAP_POSITION_V3": "KAP Destekli Pozisyon",
+        "MOMENTUM_IGNITION_V3": "Erken Momentum Başlangıcı",
+        "INTRADAY_MOMENTUM_V3": "Gün İçi Momentum Devamı",
+        "KAP_EVENT_INTRADAY_V3": "KAP Destekli Gün İçi Momentum",
+        "EARLY_IGNITION_V3": "Erken Hareket Başlangıcı",
+        "KAP_EARLY_IGNITION_V3": "KAP Destekli Erken Hareket",
+    }
+    return labels.get(str(algo or ""), str(algo or "Bilinmeyen strateji").replace("_", " ").title())
+
+
+def _market_regime_tr(regime):
+    return {
+        "RISK_ON": "Pozitif — risk iştahı yüksek",
+        "RISK_OFF": "Temkinli — risk iştahı düşük",
+        "NEUTRAL": "Dengeli / nötr",
+    }.get(str(regime or ""), str(regime or "Bilinmiyor"))
+
+
+def _signal_strength_tr(score):
+    score = _num(score, 0.0) or 0.0
+    if score >= 90:
+        return "🔥 ÇOK GÜÇLÜ"
+    if score >= 85:
+        return "💪 GÜÇLÜ"
+    if score >= 80:
+        return "✅ YÜKSEK"
+    return "🟡 SEÇİCİ"
+
+
+def _rsi_story(signal):
+    r15 = _num(signal.get("rsi_15m"))
+    r4 = _num(signal.get("rsi_4h"))
+    r1 = _num(signal.get("rsi_1d"))
+
+    if r15 is not None and r4 is not None:
+        if r15 >= 75 and r4 >= 70:
+            return "Kısa ve orta vadeli momentum ileri aşamada; şişkinlik riski yükselmiş."
+        if r15 >= 60 and 52 <= r4 < 70:
+            return "Kısa vadeli momentum güçlü, 4 saatlik trend de destekliyor; hareket olgunlaşıyor."
+        if r15 < 60 and 50 <= r4 < 65:
+            return "Momentum yeni güçleniyor; 4 saatlik yapı henüz aşırı bölgeye taşınmamış."
+        if r4 < 50:
+            return "Kısa vadeli hareket olsa da 4 saatlik ana momentum henüz tam teyit vermiyor."
+
+    if r4 is not None and r1 is not None:
+        if r4 >= 75 and r1 >= 70:
+            return "4 saatlik ve günlük momentum yüksek; trend güçlü ancak geç kalma/şişkinlik riski artmış."
+        if 52 <= r4 < 70 and 50 <= r1 < 68:
+            return "4 saatlik ve günlük RSI uyumlu; ana trend güçlü fakat aşırı bölgeye taşınmamış."
+        if r4 < 50 <= r1:
+            return "Günlük yapı korunuyor ancak 4 saatlik momentum yeniden güçlenme aşamasında."
+
+    return "RSI görünümü tek başına karar üretmez; hacim, trend, kırılım ve göreceli güç ile birlikte değerlendiriliyor."
+
+
 def format_v3_signal_message(signal):
     scope = signal.get("signal_scope")
-    icon = "📌" if scope == "POSITION" else "⚡"
-    header = "POZİSYON / SWING" if scope == "POSITION" else "GÜNLÜK TRADE"
+    score = signal.get("score")
+    strength = _signal_strength_tr(score)
+    algo_tr = _algorithm_tr(signal.get("main_algorithm"))
+    regime_tr = _market_regime_tr(signal.get("market_regime"))
+    symbol = str(signal.get("symbol") or "").replace(".IS", "")
+
+    if scope == "POSITION":
+        header = "📌 <b>POZİSYON / SWING SİNYALİ</b>"
+        meaning = "2–10 işlem günlük ana trend fırsatı; kısa hareketten çok trend devamı ve yapısal güç aranıyor."
+    else:
+        header = "⚡ <b>GÜN İÇİ ERKEN HAREKET SİNYALİ</b>"
+        meaning = "Hacim ve fiyat ivmesi yeni güçlenirken, hareket aşırı uzamadan erken yakalama amacı taşıyor."
 
     lines = [
-        f"{icon} <b>{header}</b>",
-        f"📊 <b>{signal.get('symbol')}</b>",
-        f"🧠 {signal.get('main_algorithm')}",
-        f"⭐ Skor: {signal.get('score')} / 100 ({signal.get('quality')})",
+        header,
+        f"📊 <b>{symbol}</b>",
+        f"🔥 <b>SİNYAL GÜCÜ: {strength}</b>",
+        f"⭐ Güç puanı: <b>{score}/100</b>",
+        f"🧠 Strateji: <b>{algo_tr}</b>",
         "",
-        f"💰 Giriş: {signal.get('entry_price')}",
-        f"🛑 Stop: {signal.get('stop_loss')}",
-        f"🎯 TP1: {signal.get('tp1')}",
-        f"🎯 TP2: {signal.get('tp2')}",
-        f"🚀 TP3/Trailing: {signal.get('tp3')}",
-        f"⚖️ Başlangıç riski: %{signal.get('risk_pct')}",
+        "💡 <b>Bu bildirim ne anlatıyor?</b>",
+        meaning,
+        _rsi_story(signal),
         "",
-        f"🌐 Piyasa: {signal.get('market_regime')}",
-        f"📈 Göreceli güç yüzdelik: %{signal.get('relative_strength_percentile')}",
+        "📍 <b>Fiyat ve risk planı</b>",
+        f"• İzleme / giriş bölgesi: <b>{signal.get('entry_price')}</b>",
+        f"• Koruyucu stop: <b>{signal.get('stop_loss')}</b>",
+        f"• 1. hedef: <b>{signal.get('tp1')}</b>",
+        f"• 2. hedef: <b>{signal.get('tp2')}</b>",
+        f"• Ana hedef / iz süren stop: <b>{signal.get('tp3')}</b>",
+        f"• Başlangıç fiyat riski: <b>%{signal.get('risk_pct')}</b>",
+        "",
+        "📊 <b>Teknik görünüm</b>",
+        f"• Piyasa rejimi: {regime_tr}",
+        f"• BIST içi göreceli güç: %{signal.get('relative_strength_percentile')}",
     ]
 
     if signal.get("session_rvol") is not None:
-        lines.append(f"📦 Session RVOL: {signal.get('session_rvol')}x")
+        lines.append(f"• Seans göreli hacmi: {signal.get('session_rvol')}x")
     if signal.get("session_vwap") is not None:
-        lines.append(f"〽️ Session VWAP: {signal.get('session_vwap')}")
+        lines.append(f"• Seans ortalama maliyeti (VWAP): {signal.get('session_vwap')}")
 
-    if scope == "INTRADAY":
-        if signal.get("rsi_15m") is not None:
-            lines.append(f"📐 RSI(14, 15dk): {signal.get('rsi_15m')}")
-        if signal.get("rsi_4h") is not None:
-            lines.append(f"🧭 RSI(14, 4s): {signal.get('rsi_4h')}")
-    else:
-        if signal.get("rsi_4h") is not None:
-            lines.append(f"🧭 RSI(14, 4s): {signal.get('rsi_4h')}")
-        if signal.get("rsi_1d") is not None:
-            lines.append(f"📐 RSI(14, 1G): {signal.get('rsi_1d')}")
+    if signal.get("rsi_15m") is not None:
+        lines.append(f"• RSI(14) — 15 dakika: {signal.get('rsi_15m')}")
+    if signal.get("rsi_4h") is not None:
+        lines.append(f"• RSI(14) — 4 saat: {signal.get('rsi_4h')}")
+    if signal.get("rsi_1d") is not None and scope == "POSITION":
+        lines.append(f"• RSI(14) — günlük: {signal.get('rsi_1d')}")
 
     if signal.get("fast_change_60s_pct") is not None:
-        lines.append(f"⚡ 60 sn ivme: %{signal.get('fast_change_60s_pct')}")
+        lines.append(f"• Son 60 saniye fiyat ivmesi: %{signal.get('fast_change_60s_pct')}")
     if signal.get("holding_horizon"):
-        lines.append(f"🗓 Ufuk: {signal.get('holding_horizon')}")
+        lines.append(f"• Beklenen takip ufku: {signal.get('holding_horizon')}")
     if signal.get("valid_until"):
-        lines.append(f"⏱ Geçerlilik: bugün {signal.get('valid_until')}'a kadar")
+        lines.append(f"• Gün içi geçerlilik: bugün {signal.get('valid_until')}'a kadar")
     if signal.get("event_title"):
-        lines.append(f"📰 KAP: {signal.get('event_title')}")
+        lines.append(f"• KAP desteği: {signal.get('event_title')}")
 
     reasons = signal.get("reasons") or []
     if reasons:
         lines.append("")
-        lines.append("<b>Neden seçildi?</b>")
+        lines.append("🔎 <b>Sinyali güçlendiren nedenler</b>")
         for reason in reasons[:6]:
             lines.append(f"• {reason}")
 
-    lines.append("")
-    lines.append("Risk/ödül seviyeleri paper-trade takibi için algoritmik olarak üretilmiştir.")
+    lines.extend([
+        "",
+        "⚠️ <b>Not:</b> Bu bildirim algoritmik piyasa taramasıdır. RSI tek başına sinyal üretmez; fiyat, hacim, trend, kırılım ve risk koşulları birlikte doğrulanır.",
+    ])
     return "\n".join(lines)
