@@ -50,7 +50,7 @@ jobs:
           )
 
           echo "=== SOURCE CONNECTIVITY ==="
-          ssh "${ssh_opts[@]}" "$SOURCE" 'echo SOURCE_BRIDGE_OK; hostname; test -d /home/ubuntu/bistbot'
+          ssh -n "${ssh_opts[@]}" "$SOURCE" 'echo SOURCE_BRIDGE_OK; hostname; test -d /home/ubuntu/bistbot'
 
           echo "=== SOURCE STATE PACKAGE ==="
           ssh "${ssh_opts[@]}" "$SOURCE" 'bash -se' <<'SOURCE_SCRIPT'
