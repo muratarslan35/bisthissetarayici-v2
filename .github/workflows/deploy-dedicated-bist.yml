@@ -1,0 +1,93 @@
+name: Deploy Dedicated BIST
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "*.py"
+      - "deploy/**"
+      - "requirements.txt"
+      - "tests/**"
+      - ".github/workflows/deploy-dedicated-bist.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-dedicated-bist
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+
+      - name: Deploy main to dedicated VM
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/key             -o BatchMode=yes -o IdentitiesOnly=yes             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null             -o ConnectTimeout=15 ubuntu@89.168.99.141 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          cd /home/ubuntu/bistbot
+
+          echo "=== SYNC CODE ==="
+          git fetch --prune origin
+          git reset --hard origin/main
+          git clean -fd             -e .env             -e system.db             -e data/             -e fallback_state.json             -e successful_signals.json
+          echo "LIVE_COMMIT=$(git rev-parse HEAD)"
+
+          echo "=== PYTHON ENV ==="
+          test -x venv/bin/python
+          venv/bin/python -m pip install -q -r requirements.txt
+          venv/bin/python -m compileall -q .
+          echo "PYTHON_COMPILE=PASS"
+
+          echo "=== INSTALL DEDICATED SERVICES ==="
+          bash deploy/install_dedicated_vm_services.sh /home/ubuntu/bistbot
+
+          for i in $(seq 1 20); do
+            web=$(sudo systemctl is-active bist-trading-web.service || true)
+            worker=$(sudo systemctl is-active bist-trading-worker.service || true)
+            if [ "$web" = active ] && [ "$worker" = active ]; then
+              break
+            fi
+            sleep 2
+          done
+
+          test "$(sudo systemctl is-active bist-trading-web.service)" = active
+          test "$(sudo systemctl is-active bist-trading-worker.service)" = active
+
+          echo "=== HEALTH ==="
+          curl --fail --silent --show-error http://127.0.0.1:5000/health >/tmp/bist-health.json
+          venv/bin/python - <<'PY'
+          import json
+          from universe_manager import universe_status
+          from fast_market_lane import fast_status
+
+          with open('/tmp/bist-health.json', encoding='utf-8') as f:
+              health=json.load(f)
+
+          print("HTTP_HEALTH=PASS")
+          print("KAP_STATUS=" + str(health.get("kap_status")))
+          print("UNIVERSE_STATUS=" + json.dumps(universe_status(), ensure_ascii=False))
+          print("FAST_STATUS=" + json.dumps(fast_status(), ensure_ascii=False))
+          PY
+
+          echo "=== WORKER BOOT EVIDENCE ==="
+          sleep 8
+          sudo journalctl -u bist-trading-worker.service --since "2 minutes ago" --no-pager             | grep -E 'BIST scanner worker starting|UNIVERSE_|KAP_WATCH|FAST_|Döngü:|ERROR'             | tail -80 || true
+
+          echo "BIST_WEB=$(sudo systemctl is-active bist-trading-web.service)"
+          echo "BIST_WORKER=$(sudo systemctl is-active bist-trading-worker.service)"
+          echo "DEDICATED_BIST_DEPLOY=PASS"
+          REMOTE
