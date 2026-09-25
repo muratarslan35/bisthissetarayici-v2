@@ -1,0 +1,48 @@
+name: Reset BIST Admin
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+
+      - name: Reset admin account
+        env:
+          ADMIN_PASSWORD: ${{ secrets.BIST_ADMIN_RESET_PASSWORD }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$ADMIN_PASSWORD"
+          printf '%s' "$ADMIN_PASSWORD" | ssh -i ~/.ssh/key \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            ubuntu@89.168.99.141 \
+            'cd /home/ubuntu/bistbot && venv/bin/python scripts/manage_admin.py --username Murat3547'
+
+      - name: Verify services
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            ubuntu@89.168.99.141 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          sudo systemctl restart bist-trading-web.service
+          sleep 3
+          test "$(sudo systemctl is-active bist-trading-web.service)" = active
+          curl --fail --silent --show-error http://127.0.0.1:5000/health >/dev/null
+          echo "ADMIN_RESET_VERIFICATION=PASS"
+          REMOTE
