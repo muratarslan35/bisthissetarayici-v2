@@ -126,6 +126,20 @@ button,a{font:inherit}
   border-radius:999px;padding:6px 9px;white-space:nowrap
 }
 .signal-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:11px}
+.kap-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
+.kap-card{
+  background:#14263b;border:1px solid #395672;border-radius:13px;padding:13px;
+  display:flex;flex-direction:column;gap:8px;min-height:118px
+}
+.kap-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.kap-symbol{font-size:17px;font-weight:900;color:#fff}
+.kap-time{font-size:9px;color:#9fb1c5;white-space:nowrap}
+.kap-subject{font-size:11px;line-height:1.45;color:#dce6f1;font-weight:700}
+.kap-summary{font-size:10px;line-height:1.45;color:#aebed0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.kap-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:auto}
+.kap-tag{font-size:9px;padding:4px 7px;border-radius:999px;border:1px solid #3b5878;background:#1d3550;color:#d8e7f5}
+.kap-tag.important{background:rgba(245,158,11,.14);border-color:#76501a;color:#ffd27e}
+.kap-link{color:#9fc5ff;text-decoration:none;font-size:9px;font-weight:800}
 .signal{
   position:relative;overflow:hidden;background:#14263b;border:1px solid var(--border);
   border-radius:14px;padding:15px
@@ -262,10 +276,12 @@ tr:last-child td{border-bottom:0}
     <div class="system-card">
       <div class="system-title">Temel Sistem Durumu</div>
       <div class="system-list">
-        <div class="sys"><span>Piyasa</span><b id="market-status">-</b></div>
+        <div class="sys"><span>Sunucu</span><b id="server-status">-</b></div>
         <div class="sys"><span>Tarayıcı</span><b id="worker-status">-</b></div>
-        <div class="sys"><span>Piyasa Eğilimi</span><b id="regime">-</b></div>
+        <div class="sys"><span>Piyasa</span><b id="market-status">-</b></div>
         <div class="sys"><span>KAP</span><b id="kap-status">-</b></div>
+        <div class="sys"><span>Piyasa Eğilimi</span><b id="regime">-</b></div>
+        <div class="sys"><span>Hızlı İzleme</span><b id="fast-status">-</b></div>
       </div>
     </div>
   </section>
@@ -312,6 +328,17 @@ tr:last-child td{border-bottom:0}
   </div>
 
   <section id="view-overview">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>Son Önemli KAP Bildirimleri</h2>
+          <p>Teknik sinyal motoruna yönlendirilen, resmî kaynaktan doğrulanmış güncel bildirimler.</p>
+        </div>
+        <div class="panel-badge" id="kap-overview-count">0 bildirim</div>
+      </div>
+      <div id="overview-kap" class="kap-grid"></div>
+    </div>
+
     <div class="panel">
       <div class="panel-head">
         <div>
@@ -569,6 +596,34 @@ function renderClosed(rows){
   <td>${pct(r.mfe_pct)}</td><td>${pct(r.mae_pct)}</td><td>${esc(exitLabel(r.exit_reason))}</td><td>${timeShort(r.closed_at)}</td></tr>`).join("")
   :'<tr><td colspan="10" class="empty">Henüz kapanan işlem yok.</td></tr>';
 }
+function renderKapOverview(kap){
+  const all=kap?.recent||[];
+  const relevant=all.filter(e=>e.trade_relevant&&e.detail_verified);
+  const events=(relevant.length?relevant:all.filter(e=>e.detail_verified)).slice(0,4);
+  const box=document.getElementById("overview-kap");
+  const count=document.getElementById("kap-overview-count");
+  count.textContent=events.length+" bildirim";
+  if(!events.length){
+    box.innerHTML='<div class="empty"><div><b>Yeni önemli KAP bildirimi yok</b><span>Resmî KAP taraması 7/24 devam ediyor.</span></div></div>';
+    return;
+  }
+  box.innerHTML=events.map(e=>`
+    <article class="kap-card">
+      <div class="kap-card-head">
+        <div class="kap-symbol">${esc(String(e.symbol||"").replace(".IS",""))}</div>
+        <div class="kap-time">${timeShort(e.event_time)}</div>
+      </div>
+      <div class="kap-subject">${esc(e.subject||"KAP Bildirimi")}</div>
+      ${e.summary?`<div class="kap-summary">${esc(e.summary)}</div>`:""}
+      <div class="kap-tags">
+        ${e.trade_relevant?'<span class="kap-tag important">Teknik izlemeye alındı</span>':""}
+        ${e.detail_verified?'<span class="kap-tag">Detay doğrulandı</span>':""}
+        ${e.score!=null?`<span class="kap-tag">Önem ${esc(e.score)}</span>`:""}
+        ${e.link?`<a class="kap-link" href="${esc(e.link)}" target="_blank" rel="noopener">KAP detayını aç</a>`:""}
+      </div>
+    </article>`).join("");
+}
+
 function renderKap(kap){
   const sources=kap?.sources||[];
   document.getElementById("kap-source-body").innerHTML=sources.length?sources.map(r=>`
@@ -593,6 +648,10 @@ function render(data){
   document.getElementById("server-time").textContent="Sunucu "+(data.server_time||"-");
   document.getElementById("last-refresh").textContent="Son yenileme "+new Date().toLocaleTimeString("tr-TR",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
 
+  const server=document.getElementById("server-status");
+  server.textContent="Çevrimiçi";
+  server.className="good";
+
   const market=document.getElementById("market-status");
   market.textContent=rt.market_open?"Açık":"Kapalı";
   market.className=rt.market_open?"good":"warn";
@@ -611,8 +670,12 @@ function render(data){
   ks.className=kapHealthy?"good":kap.overall==="degraded"?"warn":"bad";
 
   const activeUniverse=uni.active_count||rt.universe_size||0;
+  const fastCount=uni.fast_watchlist_count||0;
   document.getElementById("universe").textContent=activeUniverse||"-";
-  document.getElementById("fast-watchlist").textContent=uni.fast_watchlist_count||"-";
+  document.getElementById("fast-watchlist").textContent=fastCount||"-";
+  const fastStatus=document.getElementById("fast-status");
+  fastStatus.textContent=fastCount?fastCount+" hisse":"Hazırlanıyor";
+  fastStatus.className=fastCount?"good":"warn";
   document.getElementById("breadth").textContent=rt.breadth_intraday!=null?Math.round(rt.breadth_intraday*100)+"%":"-";
   document.getElementById("source").textContent=rt.data_source||uni.source||"-";
 
@@ -644,6 +707,7 @@ function render(data){
   document.getElementById("kpi-closed").textContent=closed;
   document.getElementById("kpi-win").textContent=closed?Math.round(wins/closed*100)+"%":"-";
 
+  renderKapOverview(data.kap);
   renderCards("overview-position",posOpen,"POSITION",4);
   renderCards("overview-intraday",intraOpen,"INTRADAY",4);
   renderCards("position-signals",data.position_signals,"POSITION");
@@ -661,8 +725,10 @@ async function load(){
     if(!ct.includes("application/json")){window.location="/login";return}
     render(await res.json());
   }catch(err){
+    const server=document.getElementById("server-status");
+    server.textContent="Bağlantı Yok";server.className="bad";
     const worker=document.getElementById("worker-status");
-    worker.textContent="Bağlantı Hatası";worker.className="bad";
+    worker.textContent="Bilinmiyor";worker.className="warn";
     document.getElementById("overall-status").textContent="BAĞLANTI";
     document.getElementById("overall-status").className="bad";
     document.getElementById("last-refresh").textContent="Veri alınamadı";
