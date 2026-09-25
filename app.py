@@ -156,6 +156,7 @@ init_dashboard_store()
 # ======================================================
 
 _RUNTIME_LOCK = threading.RLock()
+_TRADE_UPDATE_LOCK = threading.RLock()
 _LATEST_MARKET_BY_SYMBOL = {}
 _LATEST_MARKET_CONTEXT = {}
 _KAP_RUNTIME_CACHE = load_recent_kap_cache(minutes=1080)
@@ -174,6 +175,10 @@ def publish_market_runtime(market_data, context):
 def market_runtime_snapshot():
     with _RUNTIME_LOCK:
         return dict(_LATEST_MARKET_BY_SYMBOL), dict(_LATEST_MARKET_CONTEXT)
+
+def safe_update_open_trades(symbol, price):
+    with _TRADE_UPDATE_LOCK:
+        return update_open_trades(symbol, price)
 
 def update_kap_runtime(new_events):
     global _KAP_RUNTIME_VERSION
@@ -1131,7 +1136,7 @@ def fast_lane_loop():
                 # Open paper positions are managed on the fast lane too, so
                 # stops/TP milestones do not wait for the 5-minute broad cache.
                 if symbol in open_symbols:
-                    for event in update_open_trades(symbol, quote.get("price")):
+                    for event in safe_update_open_trades(symbol, quote.get("price")):
                         msg = format_trade_event(event)
                         if event.get("scope") == "INTRADAY":
                             send_to_channel(msg)
@@ -1450,7 +1455,7 @@ def scanner_loop():
                         # Persist and update paper-trade lifecycle before evaluating
                         # fresh entries. Bot and channel positions are independent.
                         if symbol in open_trade_symbols:
-                            for event in update_open_trades(symbol, price):
+                            for event in safe_update_open_trades(symbol, price):
                                 event_msg = format_trade_event(event)
                                 if event.get("scope") == "INTRADAY":
                                     send_to_channel(event_msg)
