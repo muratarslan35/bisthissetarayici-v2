@@ -29,10 +29,25 @@ from database import init_db, get_connection
 
 from fetch_bist import fetch_bist_data
 from market_data_hub import fetch_market_snapshot
+from fast_market_lane import (
+    FAST_POLL_SECONDS,
+    fetch_fast_quotes,
+    is_early_mover,
+    overlay_quote,
+)
+from universe_manager import (
+    get_active_universe,
+    get_discovered_universe,
+    get_fast_watchlist,
+    get_symbol_metrics,
+    refresh_universe,
+    universe_status,
+)
 from strategy_v3 import (
     build_market_context,
     evaluate_position_signals,
     evaluate_intraday_signals,
+    evaluate_fast_entry_signal,
     format_v3_signal_message,
 )
 from trade_ledger import (
@@ -135,6 +150,47 @@ app.register_blueprint(dashboard_bp)
 init_db()
 init_trade_ledger()
 init_dashboard_store()
+
+# ======================================================
+# SHARED WORKER RUNTIME
+# ======================================================
+
+_RUNTIME_LOCK = threading.RLock()
+_LATEST_MARKET_BY_SYMBOL = {}
+_LATEST_MARKET_CONTEXT = {}
+_KAP_RUNTIME_CACHE = load_recent_kap_cache(minutes=1080)
+_KAP_RUNTIME_VERSION = 0
+
+def publish_market_runtime(market_data, context):
+    global _LATEST_MARKET_BY_SYMBOL, _LATEST_MARKET_CONTEXT
+    with _RUNTIME_LOCK:
+        _LATEST_MARKET_BY_SYMBOL = {
+            item.get("symbol"): item
+            for item in (market_data or [])
+            if item.get("symbol")
+        }
+        _LATEST_MARKET_CONTEXT = dict(context or {})
+
+def market_runtime_snapshot():
+    with _RUNTIME_LOCK:
+        return dict(_LATEST_MARKET_BY_SYMBOL), dict(_LATEST_MARKET_CONTEXT)
+
+def update_kap_runtime(new_events):
+    global _KAP_RUNTIME_VERSION
+    if not new_events:
+        return _KAP_RUNTIME_VERSION
+    with _RUNTIME_LOCK:
+        _KAP_RUNTIME_CACHE.update(new_events)
+        if len(_KAP_RUNTIME_CACHE) > 700:
+            newest = list(_KAP_RUNTIME_CACHE.items())[-450:]
+            _KAP_RUNTIME_CACHE.clear()
+            _KAP_RUNTIME_CACHE.update(newest)
+        _KAP_RUNTIME_VERSION += 1
+        return _KAP_RUNTIME_VERSION
+
+def kap_runtime_snapshot():
+    with _RUNTIME_LOCK:
+        return dict(_KAP_RUNTIME_CACHE), int(_KAP_RUNTIME_VERSION)
 
 # ======================================================
 # GLOBAL TRADE TRACK
@@ -980,6 +1036,141 @@ def generate_invite_codes():
         "codes": created_codes
     })
 
+
+def _format_early_kap_notice(symbol, event):
+    title = event.get("title") or "KAP Bildirimi"
+    score = event.get("score")
+    link = event.get("link")
+    lines = [
+        "📰 <b>KAP ERKEN UYARI</b>",
+        f"📊 <b>{str(symbol).replace('.IS', '')}</b>",
+        f"📌 {title}",
+    ]
+    if score is not None:
+        lines.append(f"🧠 Olay skoru: {score}")
+    lines.append("⏱ Teknik teyit için hızlı izleme listesine alındı.")
+    if link:
+        lines.append(str(link))
+    return "\n".join(lines)
+
+
+def kap_watch_loop():
+    """
+    Dedicated 7/24 official-KAP watcher.
+
+    It is deliberately independent from the broad market-data download so a
+    slow Yahoo cycle cannot delay disclosure discovery.
+    """
+    sleep_seconds = max(10, int(os.getenv("KAP_WATCH_LOOP_SECONDS", "10")))
+    while True:
+        try:
+            symbols = get_discovered_universe()
+            new_events = check_kap(symbols)
+            if new_events:
+                update_kap_runtime(new_events)
+                for symbol, event in new_events.items():
+                    # This is an event alert, not a buy recommendation. The
+                    # fast lane still requires technical/liquidity confirmation.
+                    send_to_channel(_format_early_kap_notice(symbol, event))
+                print(
+                    f"KAP_WATCH=EVENTS count={len(new_events)} "
+                    f"universe={len(symbols)}",
+                    flush=True,
+                )
+        except Exception as exc:
+            print(f"KAP WATCH ERROR: {exc}", flush=True)
+        time.sleep(sleep_seconds)
+
+
+def universe_watch_loop():
+    # Force one discovery on worker start, then let the manager honor its TTL.
+    try:
+        refresh_universe(force=True, log=lambda msg: print(msg, flush=True))
+    except Exception as exc:
+        print(f"UNIVERSE STARTUP ERROR: {exc}", flush=True)
+
+    while True:
+        try:
+            refresh_universe(force=False, log=lambda msg: print(msg, flush=True))
+        except Exception as exc:
+            print(f"UNIVERSE WATCH ERROR: {exc}", flush=True)
+        time.sleep(60)
+
+
+def fast_lane_loop():
+    """
+    10-30 second watchlist lane.
+
+    One batched TradingView scanner request follows the strongest/liquid,
+    slow-burn, open-trade and fresh-KAP symbols. Structural indicators remain
+    sourced from the slower full snapshot to avoid turning noisy ticks into
+    signals.
+    """
+    while True:
+        try:
+            if not is_market_open():
+                time.sleep(min(30, FAST_POLL_SECONDS))
+                continue
+
+            market_by_symbol, context = market_runtime_snapshot()
+            if not market_by_symbol or not context:
+                time.sleep(5)
+                continue
+
+            kap_cache, _ = kap_runtime_snapshot()
+            open_symbols = get_open_trade_symbols()
+            priority = list(open_symbols) + list(kap_cache.keys())
+            watchlist = get_fast_watchlist(priority)
+
+            quotes = fetch_fast_quotes(watchlist)
+            if not quotes:
+                time.sleep(FAST_POLL_SECONDS)
+                continue
+
+            for symbol, quote in quotes.items():
+                # Open paper positions are managed on the fast lane too, so
+                # stops/TP milestones do not wait for the 5-minute broad cache.
+                if symbol in open_symbols:
+                    for event in update_open_trades(symbol, quote.get("price")):
+                        msg = format_trade_event(event)
+                        if event.get("scope") == "INTRADAY":
+                            send_to_channel(msg)
+                        else:
+                            broadcast_signal(msg)
+
+                has_fresh_kap = symbol in kap_cache
+                if not has_fresh_kap and not is_early_mover(quote):
+                    continue
+
+                base_item = market_by_symbol.get(symbol)
+                if not base_item:
+                    continue
+
+                item = overlay_quote(
+                    base_item,
+                    quote,
+                    universe_metrics=get_symbol_metrics(symbol),
+                )
+                if not item:
+                    continue
+
+                for sig in evaluate_fast_entry_signal(item, context, kap_cache=kap_cache):
+                    if record_signal(sig):
+                        push_signal(sig)
+                        send_to_channel(format_v3_signal_message(sig))
+                        print(
+                            "FAST_SIGNAL "
+                            f"symbol={symbol} algo={sig.get('main_algorithm')} "
+                            f"score={sig.get('score')}",
+                            flush=True,
+                        )
+
+        except Exception as exc:
+            print(f"FAST LANE ERROR: {exc}", flush=True)
+
+        time.sleep(FAST_POLL_SECONDS)
+
+
 def scanner_loop():
 
     send_startup_message()
@@ -987,9 +1178,7 @@ def scanner_loop():
     last_fetch_time = 0
     FETCH_INTERVAL = 60 if TRADING_V3_ENABLED else 5
     last_market_data = []
-    kap_cache = load_recent_kap_cache(minutes=1080)
-    last_kap_check = 0
-    KAP_INTERVAL = max(30, int(os.getenv("KAP_POLL_SECONDS", "60")))
+    kap_cache, kap_version = kap_runtime_snapshot()
 
     last_brut_report = None
     last_daily_report = None
@@ -1016,23 +1205,13 @@ def scanner_loop():
         try:
 
             # --------------------------------------------------
-            # KAP - 7/24 OFFICIAL INGEST
+            # KAP CACHE - populated by the independent 7/24 watcher thread.
             # --------------------------------------------------
-            # KAP disclosures can arrive after the exchange close. Poll the
-            # official feed before the market-open branch so overnight events
-            # are persisted and available to the next session.
-            now_ts = time.time()
-            if now_ts - last_kap_check >= KAP_INTERVAL:
-                try:
-                    new_kaps = check_kap(ENGINE_SYMBOLS)
-                    if new_kaps:
-                        kap_cache.update(new_kaps)
-                        kap_changed = True
-                        if len(kap_cache) > 500:
-                            kap_cache = dict(list(kap_cache.items())[-300:])
-                except Exception as e:
-                    print("KAP official ingest error:", e, flush=True)
-                last_kap_check = time.time()
+            latest_kap, latest_kap_version = kap_runtime_snapshot()
+            if latest_kap_version != kap_version:
+                kap_cache.update(latest_kap)
+                kap_version = latest_kap_version
+                kap_changed = True
 
             # --------------------------------------------------
             # MARKET KAPALI
@@ -1153,7 +1332,7 @@ def scanner_loop():
 
             if time.time() - last_fetch_time > FETCH_INTERVAL:
                 new_data = (
-                    fetch_market_snapshot(ENGINE_SYMBOLS)
+                    fetch_market_snapshot(get_active_universe())
                     if TRADING_V3_ENABLED
                     else fetch_bist_data(ENGINE_SYMBOLS)
                 )
@@ -1208,6 +1387,9 @@ def scanner_loop():
                 if TRADING_V3_ENABLED
                 else None
             )
+
+            if TRADING_V3_ENABLED and market_context:
+                publish_market_runtime(market_data, market_context)
 
             if TRADING_V3_ENABLED and snapshot_updated:
                 persist_market_snapshot(
