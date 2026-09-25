@@ -139,6 +139,7 @@ def init_db():
     ensure_column_exists(cur, "users", "active_session_id", "TEXT")
     ensure_column_exists(cur, "users", "last_login_at", "TEXT")
     ensure_column_exists(cur, "users", "registered_ip", "TEXT")
+    ensure_column_exists(cur, "users", "is_admin", "INTEGER DEFAULT 0")
     ensure_column_exists(cur, "users", "expiry_warning_sent", "INTEGER DEFAULT 0")
     ensure_column_exists(cur, "invite_codes", "is_used", "INTEGER DEFAULT 0")
     ensure_column_exists(cur, "invite_codes", "used_by", "TEXT")
