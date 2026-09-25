@@ -217,6 +217,9 @@ function signalCard(s,scope){
       <span class="chip">RS %${n(s.rs_percentile,0)}</span>
       <span class="chip ${dataConf>=80?"green":"amber"}">Data ${n(dataConf,0)}/100</span>
       ${s.session_rvol!=null?`<span class="chip">RVOL ${n(s.session_rvol)}x</span>`:""}
+      ${isIntra && s.rsi_15m!=null?`<span class="chip">RSI15 ${n(s.rsi_15m)}</span>`:""}
+      ${s.rsi_4h!=null?`<span class="chip">RSI4S ${n(s.rsi_4h)}</span>`:""}
+      ${!isIntra && s.rsi_1d!=null?`<span class="chip">RSI1G ${n(s.rsi_1d)}</span>`:""}
       ${s.tp1_hit?`<span class="chip green">TP1</span>`:""}
       ${s.tp2_hit?`<span class="chip green">TP2</span>`:""}
       <span class="chip">${esc(s.market_regime??"-")}</span>
