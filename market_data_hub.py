@@ -112,16 +112,24 @@ def _download_universe(symbols, interval):
     now = time.time()
     symbols = list(dict.fromkeys(symbols))
 
-    if state["data"] and now - state["ts"] < _ttl(interval):
+    cache_fresh = bool(state["data"]) and now - state["ts"] < _ttl(interval)
+    missing = [symbol for symbol in symbols if symbol not in state["data"]]
+
+    if cache_fresh and not missing:
         return state["data"]
 
     if now < state["next_allowed"]:
         return state["data"]
 
+    # When dynamic-universe discovery promotes a new stock, do not wait for the
+    # broad cache TTL to expire. Fetch only the newly requested symbols and
+    # merge them into the current cache. Normal TTL expiry still refreshes the
+    # whole requested universe.
+    fetch_symbols = missing if cache_fresh and missing else symbols
     fresh = {}
     had_error = False
 
-    for batch in _chunks(symbols, BATCH_SIZE):
+    for batch in _chunks(fetch_symbols, BATCH_SIZE):
         try:
             fresh.update(_download_batch(batch, interval, _period(interval)))
         except Exception as exc:
@@ -132,8 +140,11 @@ def _download_universe(symbols, interval):
             time.sleep(BATCH_PAUSE_SECONDS)
 
     if fresh:
-        state["data"] = fresh
-        state["ts"] = now
+        if cache_fresh and missing:
+            state["data"].update(fresh)
+        else:
+            state["data"] = fresh
+            state["ts"] = now
 
     if had_error:
         state["failures"] += 1
