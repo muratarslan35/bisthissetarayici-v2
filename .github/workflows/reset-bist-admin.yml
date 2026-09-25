@@ -2,6 +2,10 @@ name: Reset BIST Admin
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/reset-bist-admin.yml"
 
 permissions:
   contents: read
