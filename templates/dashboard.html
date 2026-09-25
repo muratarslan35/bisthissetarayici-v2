@@ -449,7 +449,14 @@ const algoLabels={
   EARLY_IGNITION_V3:"Erken Hareket Başlangıcı",
   KAP_EARLY_IGNITION_V3:"KAP Destekli Erken Hareket"
 };
-function esc(v){return String(v??"-").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",""":"&quot;","'":"&#039;"}[m]))}
+function esc(v){
+  return String(v??"-")
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;")
+    .replace(/'/g,"&#039;");
+}
 function n(v,d=2){return (typeof v==="number"&&isFinite(v))?v.toFixed(d):"-"}
 function pct(v){return (typeof v==="number"&&isFinite(v))?((v>0?"+":"")+v.toFixed(2)+"%"):"-"}
 function cls(v){return typeof v==="number"?(v>0?"good":v<0?"bad":""):""}
