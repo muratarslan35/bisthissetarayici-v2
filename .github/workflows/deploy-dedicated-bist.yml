@@ -95,3 +95,12 @@ jobs:
           echo "BIST_WORKER=$(sudo systemctl is-active bist-trading-worker.service)"
           echo "DEDICATED_BIST_DEPLOY=PASS"
           REMOTE
+
+      - name: Verify public browser access
+        run: |
+          set -Eeuo pipefail
+          curl --fail --silent --show-error --connect-timeout 10 --max-time 20 \
+            http://89.168.99.141:5000/health >/tmp/public-health.json
+          curl --fail --silent --show-error --connect-timeout 10 --max-time 20 \
+            -o /dev/null http://89.168.99.141:5000/login
+          echo "PUBLIC_DASHBOARD_PORT=PASS"
