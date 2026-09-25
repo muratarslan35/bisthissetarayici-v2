@@ -34,8 +34,11 @@ class RsiSignalContextTests(unittest.TestCase):
             "reasons": [],
         }
         message = format_v3_signal_message(signal)
-        self.assertIn("RSI(14, 15dk): 61.25", message)
-        self.assertIn("RSI(14, 4s): 57.8", message)
+        self.assertIn("RSI(14) — 15 dakika: 61.25", message)
+        self.assertIn("RSI(14) — 4 saat: 57.8", message)
+        self.assertIn("SİNYAL GÜCÜ", message)
+        self.assertIn("Erken Hareket Başlangıcı", message)
+        self.assertNotIn("RISK_ON", message)
 
     def test_position_message_shows_4h_and_daily_rsi(self):
         signal = {
@@ -57,8 +60,8 @@ class RsiSignalContextTests(unittest.TestCase):
             "reasons": [],
         }
         message = format_v3_signal_message(signal)
-        self.assertIn("RSI(14, 4s): 58.4", message)
-        self.assertIn("RSI(14, 1G): 63.7", message)
+        self.assertIn("RSI(14) — 4 saat: 58.4", message)
+        self.assertIn("RSI(14) — günlük: 63.7", message)
 
 
 if __name__ == "__main__":
