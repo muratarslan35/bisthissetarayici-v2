@@ -1,0 +1,73 @@
+name: Verify Admin-Only Startup Routing
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/verify-admin-startup-routing.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+
+      - name: Verify startup message routing
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            ubuntu@89.168.99.141 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          cd /home/ubuntu/bistbot
+
+          venv/bin/python - <<'PY'
+          import os
+          import requests
+          from dotenv import load_dotenv
+
+          load_dotenv('/home/ubuntu/bistbot/.env')
+          token = os.getenv('TELEGRAM_BOT_TOKEN')
+          admin = os.getenv('ADMIN_CHAT_ID')
+          channel = os.getenv('TELEGRAM_CHANNEL_ID')
+
+          assert token
+          assert admin
+          assert channel
+          assert str(admin) != str(channel)
+
+          r = requests.post(
+              f'https://api.telegram.org/bot{token}/getChat',
+              json={'chat_id': admin},
+              timeout=10,
+          )
+          data = r.json()
+          assert r.ok and data.get('ok')
+          assert data['result'].get('type') == 'private'
+
+          source = open('/home/ubuntu/bistbot/app.py', encoding='utf-8').read()
+          start = source.index('def send_startup_message():')
+          end = source.find('\ndef ', start + 5)
+          block = source[start:end if end > start else len(source)]
+
+          assert 'send_user_telegram(ADMIN_CHAT_ID, msg)' in block
+          assert 'broadcast_signal' not in block
+          assert 'send_to_channel' not in block
+
+          print('ADMIN_CHAT_TYPE=private')
+          print('ADMIN_CHANNEL_SEPARATION=PASS')
+          print('STARTUP_MESSAGE_ADMIN_ONLY=PASS')
+          PY
+          REMOTE
