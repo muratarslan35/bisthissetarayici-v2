@@ -1,0 +1,99 @@
+name: Audit Live Signal Quality
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/audit-live-signal-quality.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+
+      - name: Inspect live signal stores
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null             ubuntu@89.168.99.141 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          cd /home/ubuntu/bistbot
+          venv/bin/python - <<'PY'
+          import json, sqlite3
+          from pathlib import Path
+
+          db=sqlite3.connect('/home/ubuntu/bistbot/system.db')
+          db.row_factory=sqlite3.Row
+          cur=db.cursor()
+
+          print("=== V3 SIGNAL COUNTS BY DAY/SCOPE ===")
+          for r in cur.execute("""
+            SELECT substr(created_at,1,10) day, scope, count(*) c
+            FROM strategy_signals
+            GROUP BY 1,2 ORDER BY day DESC, scope
+            LIMIT 20
+          """):
+              print(dict(r))
+
+          print("=== TODAY ALGORITHMS ===")
+          for r in cur.execute("""
+            SELECT algorithm, scope, count(*) c, min(created_at) first_at, max(created_at) last_at
+            FROM strategy_signals
+            WHERE substr(created_at,1,10)=date('now','localtime')
+            GROUP BY algorithm, scope
+            ORDER BY c DESC
+          """):
+              print(dict(r))
+
+          print("=== RECENT 25 SIGNALS ===")
+          for r in cur.execute("""
+            SELECT symbol, scope, algorithm, score, entry_price, stop_loss,
+                   tp1, tp2, tp3, created_at
+            FROM strategy_signals
+            ORDER BY id DESC LIMIT 25
+          """):
+              print(dict(r))
+
+          print("=== TODAY PAPER TRADE OUTCOMES ===")
+          for r in cur.execute("""
+            SELECT scope, algorithm, status, exit_reason, count(*) c,
+                   round(avg(result_pct),3) avg_result
+            FROM paper_trades
+            WHERE substr(opened_at,1,10)=date('now','localtime')
+            GROUP BY scope, algorithm, status, exit_reason
+            ORDER BY c DESC
+          """):
+              print(dict(r))
+          db.close()
+
+          for name in ('data/weekly_state.json','data/daily_state.json','successful_signals.json'):
+              p=Path(name)
+              print(f"=== {name} exists={p.exists()} mtime={p.stat().st_mtime if p.exists() else None} ===")
+              if p.exists():
+                  try:
+                      data=json.loads(p.read_text(encoding='utf-8'))
+                      if name.endswith('weekly_state.json'):
+                          weekly=data.get('weekly',{})
+                          for wk,vals in weekly.items():
+                              print("WEEK",wk,"COUNT",len(vals) if isinstance(vals,dict) else 'n/a')
+                              if isinstance(vals,dict):
+                                  for k,v in list(vals.items())[:60]:
+                                      print("LEGACY",k,v)
+                      elif isinstance(data,dict):
+                          print("TOP_LEVEL_COUNT",len(data))
+                  except Exception as e:
+                      print("READ_ERROR",e)
+          PY
+          REMOTE
