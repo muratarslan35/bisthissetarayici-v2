@@ -160,6 +160,7 @@ init_dashboard_store()
 
 _RUNTIME_LOCK = threading.RLock()
 _TRADE_UPDATE_LOCK = threading.RLock()
+_SIGNAL_PUBLISH_LOCK = threading.RLock()
 _LATEST_MARKET_BY_SYMBOL = {}
 _LATEST_MARKET_CONTEXT = {}
 _KAP_RUNTIME_CACHE = load_recent_kap_cache(minutes=1080)
@@ -1190,18 +1191,20 @@ def fast_lane_loop():
                 fast_candidates = evaluate_fast_entry_signal(
                     item, context, kap_cache=kap_cache
                 )
-                for sig in select_publishable_candidates(
-                    fast_candidates, "INTRADAY", cycle_cap=1
-                ):
-                    if record_signal(sig):
-                        push_signal(sig)
-                        send_to_channel(format_v3_signal_message(sig))
-                        print(
-                            "FAST_SIGNAL_SELECTED "
-                            f"symbol={symbol} algo={sig.get('main_algorithm')} "
-                            f"score={sig.get('score')} policy={sig.get('policy_version')}",
-                            flush=True,
-                        )
+                with _SIGNAL_PUBLISH_LOCK:
+                    selected_fast = select_publishable_candidates(
+                        fast_candidates, "INTRADAY", cycle_cap=1
+                    )
+                    for sig in selected_fast:
+                        if record_signal(sig):
+                            push_signal(sig)
+                            send_to_channel(format_v3_signal_message(sig))
+                            print(
+                                "FAST_SIGNAL_SELECTED "
+                                f"symbol={symbol} algo={sig.get('main_algorithm')} "
+                                f"score={sig.get('score')} policy={sig.get('policy_version')}",
+                                flush=True,
+                            )
 
         except Exception as exc:
             print(f"FAST LANE ERROR: {exc}", flush=True)
@@ -1816,41 +1819,42 @@ Zarar: %{round((price-entry)/entry*100,2)}
                     print(f"⚠ {symbol} hata:", e, flush=True)
 
             if TRADING_V3_ENABLED:
-                selected_positions = select_publishable_candidates(
-                    cycle_position_candidates, "POSITION"
-                )
-                selected_intraday = select_publishable_candidates(
-                    cycle_intraday_candidates, "INTRADAY"
-                )
-
-                for sig in selected_positions:
-                    if record_signal(sig):
-                        push_signal(sig)
-                        broadcast_signal(format_v3_signal_message(sig))
-                        print(
-                            "POSITION_SIGNAL_SELECTED "
-                            f"symbol={sig.get('symbol')} score={sig.get('score')}",
-                            flush=True,
-                        )
-
-                for sig in selected_intraday:
-                    if record_signal(sig):
-                        push_signal(sig)
-                        send_to_channel(format_v3_signal_message(sig))
-                        print(
-                            "INTRADAY_SIGNAL_SELECTED "
-                            f"symbol={sig.get('symbol')} score={sig.get('score')}",
-                            flush=True,
-                        )
-
-                if selected_positions or selected_intraday:
-                    print(
-                        "SIGNAL_POLICY "
-                        f"position={len(selected_positions)} "
-                        f"intraday={len(selected_intraday)} "
-                        f"limits={policy_limits()}",
-                        flush=True,
+                with _SIGNAL_PUBLISH_LOCK:
+                    selected_positions = select_publishable_candidates(
+                        cycle_position_candidates, "POSITION"
                     )
+                    selected_intraday = select_publishable_candidates(
+                        cycle_intraday_candidates, "INTRADAY"
+                    )
+
+                    for sig in selected_positions:
+                        if record_signal(sig):
+                            push_signal(sig)
+                            broadcast_signal(format_v3_signal_message(sig))
+                            print(
+                                "POSITION_SIGNAL_SELECTED "
+                                f"symbol={sig.get('symbol')} score={sig.get('score')}",
+                                flush=True,
+                            )
+
+                    for sig in selected_intraday:
+                        if record_signal(sig):
+                            push_signal(sig)
+                            send_to_channel(format_v3_signal_message(sig))
+                            print(
+                                "INTRADAY_SIGNAL_SELECTED "
+                                f"symbol={sig.get('symbol')} score={sig.get('score')}",
+                                flush=True,
+                            )
+
+                    if selected_positions or selected_intraday:
+                        print(
+                            "SIGNAL_POLICY "
+                            f"position={len(selected_positions)} "
+                            f"intraday={len(selected_intraday)} "
+                            f"limits={policy_limits()}",
+                            flush=True,
+                        )
 
         except Exception as e:
             print("🔥 Scanner genel hata:", e, flush=True)
