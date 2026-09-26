@@ -431,7 +431,10 @@ def _risk_levels(entry, atr_value, structural=None, position=False):
     if structural is not None and structural < entry:
         candidates.append(structural)
 
-    stop = max(candidates)
+    # Use the wider of ATR and structural invalidation. A stop that sits
+    # inside the actual support/structure is noise-sensitive and was the main
+    # reason old intraday paper trades closed almost immediately.
+    stop = min(candidates)
     max_risk = entry * (0.065 if position else 0.035)
     if entry - stop > max_risk:
         stop = entry - max_risk
