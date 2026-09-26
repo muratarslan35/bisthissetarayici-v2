@@ -56,6 +56,8 @@ from trade_ledger import (
     update_open_trades,
     get_open_trade_symbols,
     format_trade_event,
+    build_v4_daily_report,
+    build_v4_weekly_report,
 )
 from dashboard_store import (
     init_dashboard_store,
@@ -63,6 +65,7 @@ from dashboard_store import (
     persist_market_snapshot,
 )
 from resource_guard import host_pressure_state
+from signal_policy import select_publishable_candidates, policy_limits
 from signal_engine import (
     process_symbol_signals,
     update_success_targets,
@@ -1098,13 +1101,13 @@ def kap_watch_loop():
             new_events = check_kap(symbols)
             if new_events:
                 update_kap_runtime(new_events)
-                for symbol, event in new_events.items():
-                    # This is an event alert, not a buy recommendation. The
-                    # fast lane still requires technical/liquidity confirmation.
-                    send_to_channel(_format_early_kap_notice(symbol, event))
+                # Raw KAP events are persisted and promoted to the fast
+                # watchlist, but they are NOT Telegram signals. A public alert
+                # is emitted only after price direction, liquidity, RVOL,
+                # RSI/VWAP and extension filters confirm a tradable response.
                 print(
-                    f"KAP_WATCH=EVENTS count={len(new_events)} "
-                    f"universe={len(symbols)}",
+                    f"KAP_WATCH=QUALIFYING_EVENTS count={len(new_events)} "
+                    f"universe={len(symbols)} telegram_raw_alerts=disabled",
                     flush=True,
                 )
         except Exception as exc:
@@ -1184,14 +1187,19 @@ def fast_lane_loop():
                 if not item:
                     continue
 
-                for sig in evaluate_fast_entry_signal(item, context, kap_cache=kap_cache):
+                fast_candidates = evaluate_fast_entry_signal(
+                    item, context, kap_cache=kap_cache
+                )
+                for sig in select_publishable_candidates(
+                    fast_candidates, "INTRADAY", cycle_cap=1
+                ):
                     if record_signal(sig):
                         push_signal(sig)
                         send_to_channel(format_v3_signal_message(sig))
                         print(
-                            "FAST_SIGNAL "
+                            "FAST_SIGNAL_SELECTED "
                             f"symbol={symbol} algo={sig.get('main_algorithm')} "
-                            f"score={sig.get('score')}",
+                            f"score={sig.get('score')} policy={sig.get('policy_version')}",
                             flush=True,
                         )
 
@@ -1224,8 +1232,9 @@ def scanner_loop():
 
         print(f"\n⏱ Döngü: {now.strftime('%H:%M:%S')}", flush=True)
 
-        reset_daily_success_if_needed()
-        reset_weekly_success_if_needed()
+        if not TRADING_V3_ENABLED:
+            reset_daily_success_if_needed()
+            reset_weekly_success_if_needed()
 
         dashboard.SYSTEM_ACTIVE = False
         if time.time() - last_heartbeat >= 30:
@@ -1255,16 +1264,22 @@ def scanner_loop():
 
                 if last_daily_report != now.date() and now.time() > BIST_CLOSE:
 
-                    report = build_daily_success_report()
+                    report = (
+                        build_v4_daily_report()
+                        if TRADING_V3_ENABLED
+                        else build_daily_success_report()
+                    )
 
                     if report:
                         send_report_to_admins(report)
 
-                    m_report = build_momentum_daily_report()
-                    if m_report:
-                        send_to_channel(m_report)
-
-                    last_momentum_reset = reset_momentum_if_needed(last_momentum_reset, now)
+                    if not TRADING_V3_ENABLED:
+                        m_report = build_momentum_daily_report()
+                        if m_report:
+                            send_to_channel(m_report)
+                        last_momentum_reset = reset_momentum_if_needed(
+                            last_momentum_reset, now
+                        )
 
                     last_daily_report = now.date()
 
@@ -1274,7 +1289,11 @@ def scanner_loop():
 
                     if last_weekly_report != week_id:
 
-                        report = build_weekly_success_report()
+                        report = (
+                            build_v4_weekly_report()
+                            if TRADING_V3_ENABLED
+                            else build_weekly_success_report()
+                        )
 
                         if report:
                             send_report_to_admins(report)
@@ -1436,6 +1455,9 @@ def scanner_loop():
             # 🔁 MAIN LOOP
             # ==================================================
 
+            cycle_position_candidates = []
+            cycle_intraday_candidates = []
+
             for item in market_data:
 
                 symbol = item.get("symbol")
@@ -1494,15 +1516,8 @@ def scanner_loop():
                             item, market_context, kap_cache=kap_cache
                         )
 
-                        for sig in position_signals:
-                            if record_signal(sig):
-                                push_signal(sig)
-                                broadcast_signal(format_v3_signal_message(sig))
-
-                        for sig in intraday_signals:
-                            if record_signal(sig):
-                                push_signal(sig)
-                                send_to_channel(format_v3_signal_message(sig))
+                        cycle_position_candidates.extend(position_signals)
+                        cycle_intraday_candidates.extend(intraday_signals)
 
                     except Exception as e:
                         print(f"⚠ V3 {symbol} hata: {e}", flush=True)
@@ -1799,6 +1814,43 @@ Zarar: %{round((price-entry)/entry*100,2)}
 
                 except Exception as e:
                     print(f"⚠ {symbol} hata:", e, flush=True)
+
+            if TRADING_V3_ENABLED:
+                selected_positions = select_publishable_candidates(
+                    cycle_position_candidates, "POSITION"
+                )
+                selected_intraday = select_publishable_candidates(
+                    cycle_intraday_candidates, "INTRADAY"
+                )
+
+                for sig in selected_positions:
+                    if record_signal(sig):
+                        push_signal(sig)
+                        broadcast_signal(format_v3_signal_message(sig))
+                        print(
+                            "POSITION_SIGNAL_SELECTED "
+                            f"symbol={sig.get('symbol')} score={sig.get('score')}",
+                            flush=True,
+                        )
+
+                for sig in selected_intraday:
+                    if record_signal(sig):
+                        push_signal(sig)
+                        send_to_channel(format_v3_signal_message(sig))
+                        print(
+                            "INTRADAY_SIGNAL_SELECTED "
+                            f"symbol={sig.get('symbol')} score={sig.get('score')}",
+                            flush=True,
+                        )
+
+                if selected_positions or selected_intraday:
+                    print(
+                        "SIGNAL_POLICY "
+                        f"position={len(selected_positions)} "
+                        f"intraday={len(selected_intraday)} "
+                        f"limits={policy_limits()}",
+                        flush=True,
+                    )
 
         except Exception as e:
             print("🔥 Scanner genel hata:", e, flush=True)

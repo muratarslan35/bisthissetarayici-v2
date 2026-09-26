@@ -146,6 +146,30 @@ class StrategyV3Tests(unittest.TestCase):
         for sig in intraday:
             self.assertEqual(sig["signal_scope"], "INTRADAY")
 
+    def test_intraday_stop_has_noise_floor(self):
+        risk = sv3._risk_levels(100.0, 0.2, structural=99.9, position=False)
+        self.assertGreaterEqual(risk["risk_pct"], 1.8)
+        self.assertLessEqual(risk["risk_pct"], 3.5)
+
+    def test_position_stop_has_wider_structural_floor(self):
+        risk = sv3._risk_levels(100.0, 0.5, structural=99.7, position=True)
+        self.assertGreaterEqual(risk["risk_pct"], 2.5)
+        self.assertLessEqual(risk["risk_pct"], 6.5)
+
+    def test_intraday_rejects_near_ceiling_entry(self):
+        x = item("CEIL.IS")
+        prev_close = float(x["tf"]["1d"]["df"]["Close"].iloc[-1])
+        x["current_price"] = prev_close * 1.085
+        ctx = {
+            "regime": "RISK_ON",
+            "breadth_intraday": 0.8,
+            "breadth_daily": 0.8,
+            "position_rank": {"CEIL.IS": 0.99},
+            "intraday_rank": {"CEIL.IS": 0.99},
+        }
+        with patch("strategy_v3._now", return_value=datetime(2026, 9, 24, 14, 0, tzinfo=TR_TZ)):
+            self.assertEqual(sv3.evaluate_intraday_signals(x, ctx), [])
+
     def test_risk_levels_are_not_fixed_plus_one_minus_five(self):
         risk = sv3._risk_levels(100.0, 2.0, structural=98.7, position=False)
         self.assertLess(risk["stop_loss"], 100.0)

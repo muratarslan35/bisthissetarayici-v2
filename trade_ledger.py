@@ -4,12 +4,20 @@ from datetime import datetime, time as dtime, timedelta
 from zoneinfo import ZoneInfo
 
 from database import get_connection
+from signal_policy import POLICY_VERSION
 
 TR_TZ = ZoneInfo("Europe/Istanbul")
 
 
 def _now():
     return datetime.now(TR_TZ)
+
+
+def _ensure_column(cur, table, column, ddl):
+    cur.execute(f"PRAGMA table_info({table})")
+    names = {row[1] for row in cur.fetchall()}
+    if column not in names:
+        cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 def init_trade_ledger():
@@ -71,6 +79,28 @@ def init_trade_ledger():
     ON paper_trades(status, symbol)
     """)
 
+    _ensure_column(
+        cur,
+        "strategy_signals",
+        "policy_version",
+        "TEXT NOT NULL DEFAULT 'PRE_SELECTIVE_V4'",
+    )
+    _ensure_column(
+        cur,
+        "paper_trades",
+        "policy_version",
+        "TEXT NOT NULL DEFAULT 'PRE_SELECTIVE_V4'",
+    )
+
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_strategy_signals_policy_scope_time
+    ON strategy_signals(policy_version, scope, created_at)
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_paper_trades_policy_scope_time
+    ON paper_trades(policy_version, scope, opened_at)
+    """)
+
     conn.commit()
     conn.close()
 
@@ -100,6 +130,7 @@ def record_signal(signal):
     now = _now()
     scope = signal.get("signal_scope")
     metadata = json.dumps(signal, ensure_ascii=False, default=str)
+    policy_version = str(signal.get("policy_version") or POLICY_VERSION)
 
     conn = get_connection()
     cur = conn.cursor()
@@ -108,8 +139,8 @@ def record_signal(signal):
     INSERT OR IGNORE INTO strategy_signals (
         fingerprint, symbol, scope, algorithm, score,
         entry_price, stop_loss, tp1, tp2, tp3,
-        market_regime, rs_percentile, metadata_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        market_regime, rs_percentile, metadata_json, created_at, policy_version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         fingerprint,
         signal.get("symbol"),
@@ -125,6 +156,7 @@ def record_signal(signal):
         signal.get("relative_strength_percentile"),
         metadata,
         now.isoformat(),
+        policy_version,
     ))
 
     inserted = cur.rowcount > 0
@@ -134,8 +166,9 @@ def record_signal(signal):
         INSERT OR IGNORE INTO paper_trades (
             fingerprint, symbol, scope, algorithm, status,
             entry_price, stop_loss, tp1, tp2, tp3, trailing_stop,
-            max_price, min_price, opened_at, expires_at, metadata_json
-        ) VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            max_price, min_price, opened_at, expires_at, metadata_json,
+            policy_version
+        ) VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             fingerprint,
             signal.get("symbol"),
@@ -152,6 +185,7 @@ def record_signal(signal):
             now.isoformat(),
             _expiry(scope).isoformat(),
             metadata,
+            policy_version,
         ))
 
     conn.commit()
@@ -339,27 +373,118 @@ def format_trade_event(event):
 
     if event.get("type") == "TP1":
         return (
-            f"🎯 <b>1. HEDEF GERÇEKLEŞTİ</b>\n"
-            f"📊 <b>{symbol}</b> | {algo}\n"
-            f"💰 Başlangıç: {event.get('entry')} → Güncel: {round(event.get('price'), 2)}\n"
-            f"📈 Fiyat değişimi: <b>%{gain}</b>\n\n"
-            f"🛡 <b>Ne değişti?</b> İlk hedefe ulaşıldığı için sanal takipte stop seviyesi maliyete yükseltildi. "
-            f"Bu aşamadan sonra amaç kazanımı koruyarak trendin devamını izlemek."
+            f"🎯 <b>{symbol} · 1. HEDEF</b>\n"
+            f"{algo}\n"
+            f"📈 Sonuç: <b>%{gain}</b> · stop maliyete taşındı."
         )
 
     if event.get("type") == "TP2":
         return (
-            f"🚀 <b>2. HEDEF GERÇEKLEŞTİ — TREND DEVAM EDİYOR</b>\n"
-            f"📊 <b>{symbol}</b> | {algo}\n"
-            f"📈 Başlangıçtan fiyat değişimi: <b>%{gain}</b>\n\n"
-            f"🛡 <b>Takip durumu:</b> Stop daha yukarı taşındı ve işlem iz süren stop mantığıyla takip edilmeye devam ediyor."
+            f"🚀 <b>{symbol} · 2. HEDEF</b>\n"
+            f"{algo}\n"
+            f"📈 Sonuç: <b>%{gain}</b> · iz süren stop aktif."
         )
 
     return (
-        f"🏁 <b>SANAL İŞLEM TAKİBİ KAPANDI</b>\n"
-        f"📊 <b>{symbol}</b> | {algo}\n"
-        f"📌 Kapanış nedeni: <b>{_exit_reason_tr(event.get('reason'))}</b>\n"
-        f"📈 Net fiyat değişimi: <b>%{gain}</b>\n"
-        f"⬆️ İşlem sırasında görülen en yüksek avantaj: %{event.get('mfe_pct')}\n"
-        f"⬇️ İşlem sırasında görülen en yüksek ters hareket: %{event.get('mae_pct')}"
+        f"🏁 <b>{symbol} · TAKİP KAPANDI</b>\n"
+        f"{algo}\n"
+        f"📌 {_exit_reason_tr(event.get('reason'))}\n"
+        f"📈 Net: <b>%{gain}</b> · En iyi: %{event.get('mfe_pct')} · En ters: %{event.get('mae_pct')}"
     )
+
+def _period_report(start_at, title):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT scope, status, exit_reason, COUNT(*) AS c,
+               AVG(result_pct) AS avg_result
+        FROM paper_trades
+        WHERE policy_version=? AND opened_at>=?
+        GROUP BY scope, status, exit_reason
+        ORDER BY scope, status
+        """,
+        (POLICY_VERSION, start_at.isoformat()),
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+
+    cur.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM strategy_signals
+        WHERE policy_version=? AND created_at>=?
+        """,
+        (POLICY_VERSION, start_at.isoformat()),
+    )
+    total_signals = int(cur.fetchone()["c"] or 0)
+    conn.close()
+
+    if total_signals == 0:
+        return None
+
+    open_count = sum(int(r["c"] or 0) for r in rows if r["status"] == "OPEN")
+    closed_rows = [r for r in rows if r["status"] == "CLOSED"]
+    closed_count = sum(int(r["c"] or 0) for r in closed_rows)
+
+    positive = 0
+    negative = 0
+    weighted_sum = 0.0
+    weighted_n = 0
+    scope_counts = {"POSITION": 0, "INTRADAY": 0}
+
+    for r in rows:
+        scope_counts[r["scope"]] = scope_counts.get(r["scope"], 0) + int(r["c"] or 0)
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT result_pct
+        FROM paper_trades
+        WHERE policy_version=? AND status='CLOSED' AND opened_at>=?
+        """,
+        (POLICY_VERSION, start_at.isoformat()),
+    )
+    for r in cur.fetchall():
+        value = r["result_pct"]
+        if value is None:
+            continue
+        value = float(value)
+        positive += 1 if value > 0 else 0
+        negative += 1 if value <= 0 else 0
+        weighted_sum += value
+        weighted_n += 1
+    conn.close()
+
+    avg_result = weighted_sum / weighted_n if weighted_n else None
+
+    lines = [
+        f"📊 <b>{title}</b>",
+        f"📡 Yeni seçici sinyal: <b>{total_signals}</b>",
+        f"📌 Pozisyon: <b>{scope_counts.get('POSITION', 0)}</b> | Gün içi: <b>{scope_counts.get('INTRADAY', 0)}</b>",
+        f"🟢 Açık takip: <b>{open_count}</b>",
+        f"🏁 Kapanan: <b>{closed_count}</b>",
+    ]
+
+    if closed_count:
+        lines.append(f"✅ Pozitif kapanış: <b>{positive}</b> | ❌ Negatif kapanış: <b>{negative}</b>")
+        if avg_result is not None:
+            lines.append(f"📈 Ortalama kapanış sonucu: <b>%{avg_result:.2f}</b>")
+
+    lines.append("ℹ️ Açık işlemler başarısız sayılmaz; yalnız kapanmış işlemler sonuç istatistiğine girer.")
+    return "\n".join(lines)
+
+
+def build_v4_daily_report():
+    now = _now()
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return _period_report(start, "GÜNLÜK SEÇİCİ SİNYAL RAPORU")
+
+
+def build_v4_weekly_report():
+    now = _now()
+    start = (now - timedelta(days=now.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return _period_report(start, "HAFTALIK SEÇİCİ SİNYAL RAPORU")

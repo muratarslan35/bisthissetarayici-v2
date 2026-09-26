@@ -10,8 +10,9 @@ TR_TZ = ZoneInfo("Europe/Istanbul")
 
 MIN_DAILY_TURNOVER = float(os.getenv("MIN_AVG_DAILY_TURNOVER_TL", "20000000"))
 POSITION_RS_MIN = float(os.getenv("POSITION_RS_PERCENTILE_MIN", "0.75"))
-INTRADAY_RS_MIN = float(os.getenv("INTRADAY_RS_PERCENTILE_MIN", "0.80"))
+INTRADAY_RS_MIN = float(os.getenv("INTRADAY_RS_PERCENTILE_MIN", "0.85"))
 IGNITION_RS_MIN = float(os.getenv("IGNITION_RS_PERCENTILE_MIN", "0.90"))
+MAX_NEW_ENTRY_DAY_CHANGE_PCT = float(os.getenv("MAX_NEW_ENTRY_DAY_CHANGE_PCT", "8.0"))
 
 _LAST_SENT = {}
 
@@ -38,6 +39,27 @@ def _frame(item, tf):
     except Exception:
         pass
     return None
+
+
+def _day_change_pct(item):
+    quote = item.get("fast_quote") or {}
+    fast_change = _num(quote.get("day_change_pct"))
+    if fast_change is not None:
+        return fast_change
+
+    price = _num(item.get("current_price"))
+    if not price:
+        return None
+
+    daily = _closed(_frame(item, "1d"), intraday=False)
+    if daily is None or daily.empty:
+        return None
+
+    prev_close = _num(daily["Close"].iloc[-1])
+    if not prev_close:
+        return None
+
+    return round((price / prev_close - 1.0) * 100.0, 3)
 
 
 def _closed(df, intraday=False):
@@ -399,20 +421,22 @@ def _risk_levels(entry, atr_value, structural=None, position=False):
     if not entry or not atr_value or atr_value <= 0:
         return None
 
-    atr_mult = 1.5 if position else 1.0
+    # Fast BIST quotes are noisy around the entry. Stops must represent a real
+    # structural invalidation, not a 0.5-1.0% micro move that immediately
+    # closes an otherwise valid setup.
+    atr_mult = 1.8 if position else 1.6
     fallback_stop = entry - atr_value * atr_mult
 
     candidates = [fallback_stop]
     if structural is not None and structural < entry:
         candidates.append(structural)
 
-    # Prefer the tighter valid structural invalidation, but never below 4.5% risk.
     stop = max(candidates)
-    max_risk = entry * (0.045 if position else 0.025)
+    max_risk = entry * (0.065 if position else 0.035)
     if entry - stop > max_risk:
         stop = entry - max_risk
 
-    min_risk = entry * (0.006 if not position else 0.012)
+    min_risk = entry * (0.025 if position else 0.018)
     risk = max(entry - stop, min_risk)
     stop = entry - risk
 
@@ -462,6 +486,7 @@ def _base_signal(item, scope, algo, score, reasons, ctx, rs_pct, risk):
         "market_regime": ctx.get("regime"),
         "market_breadth": ctx.get("breadth_intraday"),
         "relative_strength_percentile": round((rs_pct or 0.0) * 100, 1),
+        "day_change_pct": _day_change_pct(item),
         "rsi_15m": rsi_15m,
         "rsi_4h": rsi_4h,
         "rsi_1d": rsi_1d,
@@ -485,6 +510,10 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
     if not symbol or not price or d1 is None or len(d1) < 220:
         return []
 
+    day_change = _day_change_pct(item)
+    if day_change is not None and day_change >= MAX_NEW_ENTRY_DAY_CHANGE_PCT:
+        return []
+
     if _turnover_20d(d1) < MIN_DAILY_TURNOVER:
         return []
 
@@ -494,6 +523,15 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
     ema200 = close.ewm(span=200, adjust=False).mean()
     atr_d = _atr(d1)
     if not atr_d:
+        return []
+
+    rsi_1d = _rsi_wilder(close, 14)
+    rsi_4h_guard = None
+    if d4 is not None and len(d4) >= 20:
+        rsi_4h_guard = _rsi_wilder(d4["Close"], 14)
+    if (rsi_1d is not None and rsi_1d >= 78) or (
+        rsi_4h_guard is not None and rsi_4h_guard >= 74
+    ):
         return []
 
     rs_pct = ctx.get("position_rank", {}).get(symbol, 0.0)
@@ -547,7 +585,7 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
 
         structural = _num(d1["Low"].tail(10).min())
         risk = _risk_levels(price, atr_d, structural, position=True)
-        if risk and score >= 72 and _cooldown_ok(symbol, "KOMBINE_V3", 24 * 60):
+        if risk and score >= 78 and _cooldown_ok(symbol, "KOMBINE_V3", 24 * 60):
             sig = _base_signal(
                 item, "POSITION", "KOMBINE_V3", score, reasons, ctx, rs_pct, risk
             )
@@ -576,7 +614,7 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
                 score -= 10
 
             risk = _risk_levels(price, atr_d, breakout - atr_d * 0.35, position=True)
-            if risk and score >= 76 and _cooldown_ok(symbol, "SUPER_KOMBINE_V3", 24 * 60):
+            if risk and score >= 82 and _cooldown_ok(symbol, "SUPER_KOMBINE_V3", 24 * 60):
                 sig = _base_signal(
                     item, "POSITION", "SUPER_KOMBINE_V3", score, reasons, ctx, rs_pct, risk
                 )
@@ -587,15 +625,24 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
     # Position engine may use a verified KAP released after the previous
     # close; keep it eligible into the next session.
     kap = _fresh_kap(symbol, kap_cache, max_minutes=1080)
-    if kap and kap.get("verified") and trend_up and four_hour_up and rs_pct >= 0.80:
-        score = 72 + rs_pct * 16 + min(8, max(0, _num(kap.get("score"), 0.0) or 0.0))
+    kap_score = _num(kap.get("score"), 0.0) if kap else 0.0
+    kap_position_confirmed = bool(
+        kap
+        and kap.get("verified")
+        and trend_up
+        and four_hour_up
+        and rs_pct >= 0.82
+        and (kap_score >= 12 or volume_ratio >= 1.50)
+    )
+    if kap_position_confirmed:
+        score = 72 + rs_pct * 16 + min(8, max(0, kap_score))
         reasons = [
             "Taze KAP olayı",
             "Günlük ve 4 saatlik ana eğilim KAP hareketini destekliyor",
             f"20 günlük göreceli güç yüzdelik: %{round(rs_pct * 100)}",
         ]
         risk = _risk_levels(price, atr_d, _num(d1["Low"].tail(8).min()), position=True)
-        if risk and score >= 78 and _cooldown_ok(symbol, "KAP_POSITION_V3", 24 * 60):
+        if risk and score >= 84 and _cooldown_ok(symbol, "KAP_POSITION_V3", 24 * 60):
             sig = _base_signal(
                 item, "POSITION", "KAP_POSITION_V3", score, reasons, ctx, rs_pct, risk
             )
@@ -609,7 +656,6 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
 
     # Only the best position setup is sent to the bot for this symbol/snapshot.
     best = max(candidates, key=lambda x: x["score"])
-    _mark_sent(symbol, best["main_algorithm"])
     return [best]
 
 
@@ -619,9 +665,14 @@ def evaluate_intraday_signals(item, ctx, kap_cache=None):
     if _num(item.get("data_confidence"), 100.0) < 80:
         return []
     d15 = _frame(item, "15m")
+    d4 = _closed(_frame(item, "4h"), intraday=True)
     d1 = _closed(_frame(item, "1d"), intraday=False)
 
     if not symbol or not price or d15 is None or len(d15) < 80:
+        return []
+
+    day_change = _day_change_pct(item)
+    if day_change is not None and day_change >= MAX_NEW_ENTRY_DAY_CHANGE_PCT:
         return []
 
     now = _now()
@@ -638,6 +689,13 @@ def evaluate_intraday_signals(item, ctx, kap_cache=None):
     close15 = closed15["Close"].astype(float)
     ema20 = close15.ewm(span=20, adjust=False).mean()
     ema50 = close15.ewm(span=50, adjust=False).mean()
+
+    rsi_15_guard = _rsi_wilder(close15, 14)
+    rsi_4_guard = _rsi_wilder(d4["Close"], 14) if d4 is not None and len(d4) >= 20 else None
+    if (rsi_15_guard is not None and rsi_15_guard >= 75) or (
+        rsi_4_guard is not None and rsi_4_guard >= 72
+    ):
+        return []
 
     atr15 = _atr(closed15)
     if not atr15:
@@ -669,9 +727,9 @@ def evaluate_intraday_signals(item, ctx, kap_cache=None):
         and acceleration > 0
         and compression is not None
         and compression <= 0.95
-        and breakout_distance >= -0.006
-        and extension_atr <= 1.5
-        and srvol >= 0.9
+        and breakout_distance >= -0.004
+        and extension_atr <= 1.0
+        and srvol >= 1.15
     )
 
     if ignition_conditions:
@@ -691,7 +749,7 @@ def evaluate_intraday_signals(item, ctx, kap_cache=None):
         ]
 
         risk = _risk_levels(price, atr15, max(vwap, breakout - atr15 * 0.5), position=False)
-        if risk and score >= 75 and _cooldown_ok(symbol, "MOMENTUM_IGNITION_V3", 90):
+        if risk and score >= 82 and _cooldown_ok(symbol, "MOMENTUM_IGNITION_V3", 90):
             sig = _base_signal(
                 item, "INTRADAY", "MOMENTUM_IGNITION_V3", score, reasons, ctx, rs_pct, risk
             )
@@ -708,10 +766,10 @@ def evaluate_intraday_signals(item, ctx, kap_cache=None):
         rs_pct >= INTRADAY_RS_MIN
         and trend_up
         and above_vwap
-        and srvol >= 1.05
+        and srvol >= 1.25
         and velocity > 0
-        and breakout_distance >= -0.004
-        and extension_atr <= 2.0
+        and breakout_distance >= -0.003
+        and extension_atr <= 1.25
     )
 
     if continuation_conditions:
@@ -734,7 +792,7 @@ def evaluate_intraday_signals(item, ctx, kap_cache=None):
         ]
 
         risk = _risk_levels(price, atr15, max(vwap, breakout - atr15 * 0.65), position=False)
-        if risk and score >= 74 and _cooldown_ok(symbol, "INTRADAY_MOMENTUM_V3", 120):
+        if risk and score >= 82 and _cooldown_ok(symbol, "INTRADAY_MOMENTUM_V3", 120):
             sig = _base_signal(
                 item, "INTRADAY", "INTRADAY_MOMENTUM_V3", score, reasons, ctx, rs_pct, risk
             )
@@ -747,8 +805,20 @@ def evaluate_intraday_signals(item, ctx, kap_cache=None):
     # 3) KAP EVENT MOMENTUM: event and technical confirmation are measured separately.
     # Intraday KAP momentum must be genuinely fresh and verified.
     kap = _fresh_kap(symbol, kap_cache, max_minutes=30)
-    if kap and kap.get("verified") and trend_up and above_vwap and rs_pct >= 0.75 and velocity > 0:
-        kap_score = _num(kap.get("score"), 0.0) or 0.0
+    kap_score = _num(kap.get("score"), 0.0) or 0.0 if kap else 0.0
+    kap_market_response = bool(
+        kap
+        and kap.get("verified")
+        and trend_up
+        and above_vwap
+        and rs_pct >= 0.85
+        and velocity > 0
+        and srvol >= 1.25
+        and breakout_distance >= -0.003
+        and extension_atr <= 1.0
+        and (kap_score >= 12 or srvol >= 1.60)
+    )
+    if kap_market_response:
         score = 62 + rs_pct * 16 + min(10, max(0.0, kap_score))
         if srvol >= 1.10:
             score += 6
@@ -765,7 +835,7 @@ def evaluate_intraday_signals(item, ctx, kap_cache=None):
         ]
 
         risk = _risk_levels(price, atr15, max(vwap, breakout - atr15 * 0.6), position=False)
-        if risk and score >= 76 and _cooldown_ok(symbol, "KAP_EVENT_INTRADAY_V3", 120):
+        if risk and score >= 84 and _cooldown_ok(symbol, "KAP_EVENT_INTRADAY_V3", 120):
             sig = _base_signal(
                 item, "INTRADAY", "KAP_EVENT_INTRADAY_V3", score, reasons, ctx, rs_pct, risk
             )
@@ -783,7 +853,6 @@ def evaluate_intraday_signals(item, ctx, kap_cache=None):
     # Different intraday families may qualify, but avoid channel spam:
     # publish only the strongest current setup for this symbol.
     best = max(candidates, key=lambda x: x["score"])
-    _mark_sent(symbol, best["main_algorithm"])
     return [best]
 
 
@@ -831,8 +900,8 @@ def evaluate_fast_entry_signal(item, ctx, kap_cache=None):
     ch60 = _num(quote.get("change_60s_pct"), 0.0) or 0.0
     day_change = _num(quote.get("day_change_pct"), 0.0) or 0.0
 
-    # Do not chase a stock already pinned close to the daily upper limit.
-    if day_change >= 9.7:
+    # Never open a new trade into a near-ceiling / already exhausted move.
+    if day_change >= MAX_NEW_ENTRY_DAY_CHANGE_PCT:
         return []
 
     close1 = d1["Close"].astype(float)
@@ -846,30 +915,41 @@ def evaluate_fast_entry_signal(item, ctx, kap_cache=None):
         return []
 
     vwap = session_vwap(d15)
-    atr15 = _atr(_closed(d15, intraday=True))
+    closed15 = _closed(d15, intraday=True)
+    atr15 = _atr(closed15)
     breakout = _breakout_level(d15, 20)
     if not vwap or not atr15 or not breakout:
+        return []
+
+    d4 = _closed(_frame(item, "4h"), intraday=True)
+    rsi_15_guard = _rsi_wilder(closed15["Close"], 14) if closed15 is not None else None
+    rsi_4_guard = _rsi_wilder(d4["Close"], 14) if d4 is not None and len(d4) >= 20 else None
+    if (rsi_15_guard is not None and rsi_15_guard >= 75) or (
+        rsi_4_guard is not None and rsi_4_guard >= 72
+    ):
         return []
 
     kap = _fresh_kap(symbol, kap_cache, max_minutes=30)
     kap_verified = bool(kap and kap.get("verified"))
 
     standard_mover = (
-        rs_pct >= 0.78
-        and fast_rvol >= 1.20
-        and (ch60 >= 0.22 or ch30 >= 0.16 or ch15 >= 0.10)
+        rs_pct >= 0.88
+        and fast_rvol >= 1.35
+        and (ch60 >= 0.25 or ch30 >= 0.18)
     )
     slow_burn_mover = (
         slow_burn
-        and rs_pct >= 0.70
-        and fast_rvol >= 0.90
-        and ch60 >= 0.12
+        and rs_pct >= 0.82
+        and fast_rvol >= 1.10
+        and ch60 >= 0.15
     )
+    kap_score = _num(kap.get("score"), 0.0) or 0.0 if kap else 0.0
+    strong_kap = kap_score >= 12
     kap_mover = (
         kap_verified
-        and rs_pct >= 0.65
-        and fast_rvol >= 0.90
-        and ch60 >= 0.05
+        and rs_pct >= 0.85
+        and fast_rvol >= (1.35 if strong_kap else 1.60)
+        and ch60 >= (0.15 if strong_kap else 0.25)
     )
 
     if not (standard_mover or slow_burn_mover or kap_mover):
@@ -882,7 +962,7 @@ def evaluate_fast_entry_signal(item, ctx, kap_cache=None):
     if not near_trigger:
         return []
 
-    if price < vwap and not kap_mover:
+    if price < vwap:
         return []
 
     score = 56.0 + rs_pct * 16.0
@@ -913,7 +993,7 @@ def evaluate_fast_entry_signal(item, ctx, kap_cache=None):
         score -= 7.0
 
     algorithm = "KAP_EARLY_IGNITION_V3" if kap_verified else "EARLY_IGNITION_V3"
-    threshold = 76 if kap_verified else 78
+    threshold = 86 if kap_verified else 84
 
     structural = max(vwap, breakout - atr15 * 0.70)
     risk = _risk_levels(price, atr15, structural, position=False)
@@ -944,7 +1024,6 @@ def evaluate_fast_entry_signal(item, ctx, kap_cache=None):
         sig["event_title"] = kap.get("title")
         sig["event_link"] = kap.get("link")
 
-    _mark_sent(symbol, algorithm)
     return [sig]
 
 
@@ -1038,71 +1117,46 @@ def format_v3_signal_message(signal):
     score = signal.get("score")
     strength = _signal_strength_tr(score)
     algo_tr = _algorithm_tr(signal.get("main_algorithm"))
-    regime_tr = _market_regime_tr(signal.get("market_regime"))
     symbol = str(signal.get("symbol") or "").replace(".IS", "")
 
-    if scope == "POSITION":
-        header = "📌 <b>POZİSYON / SWING SİNYALİ</b>"
-        meaning = "2–10 işlem günlük ana eğilim fırsatı; kısa sıçramadan çok kalıcı güç ve yapısal devam aranıyor."
-    else:
-        header = "⚡ <b>GÜN İÇİ ERKEN HAREKET SİNYALİ</b>"
-        meaning = "Hacim ve fiyat gücü yeni artarken, hareket aşırı uzamadan erken yakalama amacı taşıyor."
-
+    header = "📌 <b>POZİSYON SİNYALİ</b>" if scope == "POSITION" else "⚡ <b>GÜN İÇİ SİNYAL</b>"
     lines = [
-        header,
-        f"📊 <b>{symbol}</b>",
-        f"🔥 <b>SİNYAL GÜCÜ: {strength}</b>",
-        f"⭐ Güç puanı: <b>{score}/100</b>",
-        f"🧠 Strateji: <b>{algo_tr}</b>",
-        f"🧭 RSI fazı: <b>{_rsi_phase_tr(signal)}</b>",
+        f"{header} | <b>{symbol}</b>",
+        f"{strength} · <b>{score}/100</b> · {algo_tr}",
+        f"🧭 {_rsi_phase_tr(signal)}",
         "",
-        "💡 <b>Bu bildirim ne anlatıyor?</b>",
-        meaning,
-        _rsi_story(signal),
-        "",
-        "📍 <b>Fiyat ve risk planı</b>",
-        f"• İzleme / giriş bölgesi: <b>{signal.get('entry_price')}</b>",
-        f"• Koruyucu stop: <b>{signal.get('stop_loss')}</b>",
-        f"• 1. hedef: <b>{signal.get('tp1')}</b>",
-        f"• 2. hedef: <b>{signal.get('tp2')}</b>",
-        f"• Ana hedef / iz süren stop: <b>{signal.get('tp3')}</b>",
-        f"• Başlangıç fiyat riski: <b>%{signal.get('risk_pct')}</b>",
-        "",
-        "📊 <b>Teknik görünüm</b>",
-        f"• Piyasa rejimi: {regime_tr}",
-        f"• BIST içi göreceli güç: %{signal.get('relative_strength_percentile')}",
+        f"💰 Giriş <b>{signal.get('entry_price')}</b> · Stop <b>{signal.get('stop_loss')}</b> (%{signal.get('risk_pct')})",
+        f"🎯 H1 <b>{signal.get('tp1')}</b> · H2 <b>{signal.get('tp2')}</b> · H3 <b>{signal.get('tp3')}</b>",
     ]
 
-    if signal.get("session_rvol") is not None:
-        lines.append(f"• Seans göreli hacmi: {signal.get('session_rvol')}x")
-    if signal.get("session_vwap") is not None:
-        lines.append(f"• Seans ortalama maliyeti (VWAP): {signal.get('session_vwap')}")
-
-    if signal.get("rsi_15m") is not None:
-        lines.append(f"• RSI(14) — 15 dakika: {signal.get('rsi_15m')}")
+    tech = []
+    if signal.get("rsi_15m") is not None and scope != "POSITION":
+        tech.append(f"RSI15 {signal.get('rsi_15m')}")
     if signal.get("rsi_4h") is not None:
-        lines.append(f"• RSI(14) — 4 saat: {signal.get('rsi_4h')}")
+        tech.append(f"RSI4s {signal.get('rsi_4h')}")
     if signal.get("rsi_1d") is not None and scope == "POSITION":
-        lines.append(f"• RSI(14) — günlük: {signal.get('rsi_1d')}")
+        tech.append(f"RSI1g {signal.get('rsi_1d')}")
+    if signal.get("session_rvol") is not None:
+        tech.append(f"Hacim {signal.get('session_rvol')}x")
+    if signal.get("relative_strength_percentile") is not None:
+        tech.append(f"RS %{signal.get('relative_strength_percentile')}")
+    if tech:
+        lines.append("📊 " + " · ".join(tech))
 
     if signal.get("fast_change_60s_pct") is not None:
-        lines.append(f"• Son 60 saniye fiyat ivmesi: %{signal.get('fast_change_60s_pct')}")
-    if signal.get("holding_horizon"):
-        lines.append(f"• Beklenen takip ufku: {signal.get('holding_horizon')}")
-    if signal.get("valid_until"):
-        lines.append(f"• Gün içi geçerlilik: bugün {signal.get('valid_until')}'a kadar")
+        lines.append(f"⚡ 60 sn ivme %{signal.get('fast_change_60s_pct')}")
+
     if signal.get("event_title"):
-        lines.append(f"• KAP desteği: {signal.get('event_title')}")
+        lines.append(f"📰 KAP teyidi: {signal.get('event_title')}")
 
     reasons = signal.get("reasons") or []
     if reasons:
-        lines.append("")
-        lines.append("🔎 <b>Sinyali güçlendiren nedenler</b>")
-        for reason in reasons[:6]:
-            lines.append(f"• {reason}")
+        short = " • ".join(str(x) for x in reasons[:3])
+        lines.append(f"✅ {short}")
 
-    lines.extend([
-        "",
-        "⚠️ <b>Not:</b> Bu bildirim algoritmik piyasa taramasıdır. RSI tek başına sinyal üretmez; fiyat, hacim, ana eğilim, kırılım ve risk koşulları birlikte doğrulanır.",
-    ])
+    if scope == "POSITION":
+        lines.append("⏱ Takip: 2–10 işlem günü")
+    else:
+        lines.append("⏱ Gün içi; tavan/uzama ve tekrar sinyal filtreleri uygulanmıştır.")
+
     return "\n".join(lines)

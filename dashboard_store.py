@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from database import get_connection
+from signal_policy import POLICY_VERSION
 
 TR_TZ = ZoneInfo("Europe/Istanbul")
 
@@ -232,9 +233,10 @@ def _signal_rows(cur, scope, limit=80):
     LEFT JOIN paper_trades p ON p.fingerprint = s.fingerprint
     LEFT JOIN market_prices mp ON mp.symbol = s.symbol
     WHERE s.scope = ?
+      AND s.policy_version = ?
     ORDER BY s.id DESC
     LIMIT ?
-    """, (scope, int(limit)))
+    """, (scope, POLICY_VERSION, int(limit)))
 
     rows = []
     for row in cur.fetchall():
@@ -283,10 +285,11 @@ def _performance(cur, days=30):
         MIN(result_pct) AS worst_result_pct
     FROM paper_trades
     WHERE status = 'CLOSED'
+      AND policy_version = ?
       AND closed_at >= ?
     GROUP BY scope, algorithm
     ORDER BY scope, avg_result_pct DESC
-    """, (since,))
+    """, (POLICY_VERSION, since))
 
     algorithms = []
     for row in cur.fetchall():
@@ -307,8 +310,9 @@ def _performance(cur, days=30):
         AVG(mae_pct) AS avg_open_mae_pct
     FROM paper_trades
     WHERE status = 'OPEN'
+      AND policy_version = ?
     GROUP BY scope
-    """)
+    """, (POLICY_VERSION,))
 
     open_summary = {}
     for row in cur.fetchall():
@@ -329,9 +333,10 @@ def _recent_closed(cur, limit=40):
         mfe_pct, mae_pct, exit_reason, opened_at, closed_at
     FROM paper_trades
     WHERE status = 'CLOSED'
+      AND policy_version = ?
     ORDER BY id DESC
     LIMIT ?
-    """, (int(limit),))
+    """, (POLICY_VERSION, int(limit)))
 
     return [dict(r) for r in cur.fetchall()]
 
