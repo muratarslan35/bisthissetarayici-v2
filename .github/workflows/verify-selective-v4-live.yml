@@ -1,0 +1,118 @@
+name: Verify Selective V4 Live
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/verify-selective-v4-live.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+
+      - name: Verify live V4 and archive legacy report state
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            ubuntu@89.168.99.141 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          cd /home/ubuntu/bistbot
+
+          echo "LIVE_COMMIT=$(git rev-parse HEAD)"
+          echo "WEB=$(sudo systemctl is-active bist-trading-web.service)"
+          echo "WORKER=$(sudo systemctl is-active bist-trading-worker.service)"
+          test "$(sudo systemctl is-active bist-trading-web.service)" = active
+          test "$(sudo systemctl is-active bist-trading-worker.service)" = active
+
+          venv/bin/python - <<'PY'
+          import json
+          import sqlite3
+          from pathlib import Path
+
+          from signal_policy import POLICY_VERSION, policy_limits
+          from dashboard_store import get_dashboard_data
+
+          assert POLICY_VERSION == "SELECTIVE_V4"
+          limits=policy_limits()
+          print("POLICY=" + json.dumps(limits, ensure_ascii=False, sort_keys=True))
+          assert limits["intraday"]["daily_cap"] == 6
+          assert limits["position"]["daily_cap"] == 3
+          assert limits["intraday"]["hourly_cap"] == 2
+          assert limits["position"]["hourly_cap"] == 1
+          assert limits["max_new_entry_day_change_pct"] == 8.0
+
+          db=sqlite3.connect("system.db")
+          db.row_factory=sqlite3.Row
+          cur=db.cursor()
+          sig_cols={r["name"] for r in cur.execute("PRAGMA table_info(strategy_signals)")}
+          trade_cols={r["name"] for r in cur.execute("PRAGMA table_info(paper_trades)")}
+          assert "policy_version" in sig_cols
+          assert "policy_version" in trade_cols
+          print("POLICY_SCHEMA=PASS")
+
+          old=cur.execute(
+              "SELECT COUNT(*) c FROM strategy_signals WHERE policy_version='PRE_SELECTIVE_V4'"
+          ).fetchone()["c"]
+          new=cur.execute(
+              "SELECT COUNT(*) c FROM strategy_signals WHERE policy_version='SELECTIVE_V4'"
+          ).fetchone()["c"]
+          print(f"PRE_V4_SIGNALS={old}")
+          print(f"SELECTIVE_V4_SIGNALS={new}")
+          db.close()
+
+          source=Path("app.py").read_text(encoding="utf-8")
+          start=source.index("def kap_watch_loop():")
+          end=source.index("\ndef ", start+5)
+          kap_block=source[start:end]
+          assert "send_to_channel(" not in kap_block
+          assert "telegram_raw_alerts=disabled" in kap_block
+          print("RAW_KAP_TELEGRAM_DISABLED=PASS")
+
+          d=get_dashboard_data()
+          pos=d.get("position_signals") or []
+          intra=d.get("intraday_signals") or []
+          print(f"DASHBOARD_V4_POSITION_ROWS={len(pos)}")
+          print(f"DASHBOARD_V4_INTRADAY_ROWS={len(intra)}")
+          PY
+
+          echo "=== ARCHIVE LEGACY SUCCESS REPORT FILES ==="
+          mkdir -p data/legacy_report_archive
+          stamp="$(date +%Y%m%dT%H%M%S)"
+          if [ -f data/weekly_state.json ]; then
+            cp -p data/weekly_state.json "data/legacy_report_archive/weekly_state.${stamp}.legacy.json"
+            rm -f data/weekly_state.json
+            echo "LEGACY_WEEKLY_ARCHIVED=PASS"
+          else
+            echo "LEGACY_WEEKLY_ARCHIVED=ALREADY"
+          fi
+          if [ -f data/daily_state.json ]; then
+            cp -p data/daily_state.json "data/legacy_report_archive/daily_state.${stamp}.legacy.json"
+            rm -f data/daily_state.json
+            echo "LEGACY_DAILY_ARCHIVED=PASS"
+          else
+            echo "LEGACY_DAILY_ARCHIVED=ALREADY"
+          fi
+
+          echo "=== RECENT WORKER ERRORS ==="
+          sudo journalctl -u bist-trading-worker.service --since "10 minutes ago" --no-pager \
+            | grep -E 'Traceback|Scanner genel hata|FAST LANE ERROR|KAP WATCH ERROR' \
+            | tail -30 || true
+
+          curl --fail --silent --show-error http://127.0.0.1:5000/health >/dev/null
+          echo "SELECTIVE_V4_LIVE=PASS"
+          REMOTE
