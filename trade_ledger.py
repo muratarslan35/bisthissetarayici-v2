@@ -373,31 +373,24 @@ def format_trade_event(event):
 
     if event.get("type") == "TP1":
         return (
-            f"🎯 <b>1. HEDEF GERÇEKLEŞTİ</b>\n"
-            f"📊 <b>{symbol}</b> | {algo}\n"
-            f"💰 Başlangıç: {event.get('entry')} → Güncel: {round(event.get('price'), 2)}\n"
-            f"📈 Fiyat değişimi: <b>%{gain}</b>\n\n"
-            f"🛡 <b>Ne değişti?</b> İlk hedefe ulaşıldığı için sanal takipte stop seviyesi maliyete yükseltildi. "
-            f"Bu aşamadan sonra amaç kazanımı koruyarak trendin devamını izlemek."
+            f"🎯 <b>{symbol} · 1. HEDEF</b>\n"
+            f"{algo}\n"
+            f"📈 Sonuç: <b>%{gain}</b> · stop maliyete taşındı."
         )
 
     if event.get("type") == "TP2":
         return (
-            f"🚀 <b>2. HEDEF GERÇEKLEŞTİ — TREND DEVAM EDİYOR</b>\n"
-            f"📊 <b>{symbol}</b> | {algo}\n"
-            f"📈 Başlangıçtan fiyat değişimi: <b>%{gain}</b>\n\n"
-            f"🛡 <b>Takip durumu:</b> Stop daha yukarı taşındı ve işlem iz süren stop mantığıyla takip edilmeye devam ediyor."
+            f"🚀 <b>{symbol} · 2. HEDEF</b>\n"
+            f"{algo}\n"
+            f"📈 Sonuç: <b>%{gain}</b> · iz süren stop aktif."
         )
 
     return (
-        f"🏁 <b>SANAL İŞLEM TAKİBİ KAPANDI</b>\n"
-        f"📊 <b>{symbol}</b> | {algo}\n"
-        f"📌 Kapanış nedeni: <b>{_exit_reason_tr(event.get('reason'))}</b>\n"
-        f"📈 Net fiyat değişimi: <b>%{gain}</b>\n"
-        f"⬆️ İşlem sırasında görülen en yüksek avantaj: %{event.get('mfe_pct')}\n"
-        f"⬇️ İşlem sırasında görülen en yüksek ters hareket: %{event.get('mae_pct')}"
+        f"🏁 <b>{symbol} · TAKİP KAPANDI</b>\n"
+        f"{algo}\n"
+        f"📌 {_exit_reason_tr(event.get('reason'))}\n"
+        f"📈 Net: <b>%{gain}</b> · En iyi: %{event.get('mfe_pct')} · En ters: %{event.get('mae_pct')}"
     )
-
 
 def _period_report(start_at, title):
     conn = get_connection()
