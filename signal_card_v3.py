@@ -10,7 +10,7 @@ from professional_technical_engine import chart_geometry, most_series, rsi_diver
 
 TR_TZ = ZoneInfo("Europe/Istanbul")
 
-W, H = 1440, 2420
+W, H = 1440, 2480
 BG = (10, 20, 34)
 PANEL = (20, 38, 60)
 PANEL2 = (25, 48, 75)
@@ -147,15 +147,8 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
         yy = y + i * price_h / 6
         draw.line((x, yy, x + w, yy), fill=GRID, width=1)
 
-    # Rising-channel bands sit behind candles, like a TradingView overlay.
-    _draw_series_line(draw, channel.get("upper"), (73, 103, 135), x, w, lo, hi, y, price_h, 2)
-    _draw_series_line(draw, channel.get("middle"), CYAN, x, w, lo, hi, y, price_h, 3)
-    _draw_series_line(draw, channel.get("lower"), (73, 103, 135), x, w, lo, hi, y, price_h, 2)
-
-    if trend_lines.get("upper"):
-        _draw_series_line(draw, trend_lines["upper"], AMBER, x, w, lo, hi, y, price_h, 3)
-    if trend_lines.get("lower"):
-        _draw_series_line(draw, trend_lines["lower"], GREEN, x, w, lo, hi, y, price_h, 3)
+    # Channel/triangle geometry remains in the signal engine. It is intentionally
+    # not overlaid here: the execution chart shows only actionable references.
 
     n = len(df)
     cw = max(4, w / n)
@@ -383,7 +376,7 @@ def build_signal_card(signal, item, state=None):
         bottom_top = 1900
 
     # Bottom-left: trade plan and compact technical KPIs.
-    left = (24, bottom_top, 552, H - 48)
+    left = (24, bottom_top, 552, H - 112)
     _rounded(draw, left, 18, fill=PANEL, outline=GRID)
     oy = bottom_top - 1140
     _text(draw, (46, 1160 + oy), "TRADE PLANI", 20, WHITE, True)
@@ -412,7 +405,7 @@ def build_signal_card(signal, item, state=None):
     _text(draw, (62, 1568 + oy), f"{calibration} · n={sample}", 19, AMBER if calibration != "CALIBRATED" else GREEN, True)
 
     # Bottom-right: only evidence that formed; no generic indicator dump.
-    right = (572, bottom_top, W - 24, H - 48)
+    right = (572, bottom_top, W - 24, H - 112)
     _rounded(draw, right, 18, fill=PANEL, outline=GRID)
     _text(draw, (596, 1160 + oy), "NEDEN SİNYAL?", 20, WHITE, True)
     confirmations = list(signal.get("technical_confirmations") or [])
@@ -433,9 +426,26 @@ def build_signal_card(signal, item, state=None):
         _text(draw, (614, 1527 + oy), "YAPISAL VETO YOK", 15, GREEN, True)
         _text(draw, (614, 1555 + oy), "Stop seviyesi yapının bozulduğu alanı temsil eder.", 14, MUTED)
 
+    # Stable color contract, printed on every Telegram card.
+    legend = [
+        (BLUE, "EMA20 · kısa trend"),
+        (AMBER, "EMA50 · ana trend"),
+        ((218, 112, 255), "MOST · trend stop"),
+        (GREEN, "Destek / hedef"),
+        (RED, "Direnç / stop"),
+        (CYAN, "Giriş fiyatı"),
+    ]
+    legend_y = H - 82
+    _text(draw, (30, legend_y - 25), "ÇİZGİ RENKLERİ", 13, MUTED, True)
+    xx = 30
+    for color, label in legend:
+        draw.line((xx, legend_y, xx + 25, legend_y), fill=color, width=5)
+        _text(draw, (xx + 34, legend_y), label, 12, TEXT, True, "lm")
+        xx += 220
+
     now = datetime.now(TR_TZ).strftime("%d.%m.%Y %H:%M:%S")
-    _text(draw, (30, H - 22), "Ücretsiz OHLCV · Order-block/FVG mum türevidir, L2 emir defteri değildir.", 12, MUTED, False, "lb")
-    _text(draw, (W - 30, H - 22), now, 12, MUTED, False, "rb")
+    _text(draw, (30, H - 18), "Ücretsiz OHLCV · Order-block/FVG mum türevidir, L2 emir defteri değildir.", 12, MUTED, False, "lb")
+    _text(draw, (W - 30, H - 18), now, 12, MUTED, False, "rb")
 
     out_dir = Path("cards")
     out_dir.mkdir(exist_ok=True)
