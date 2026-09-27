@@ -4,6 +4,8 @@ from datetime import datetime, time as dtime, timedelta
 from zoneinfo import ZoneInfo
 
 from database import get_connection
+from execution_model import modeled_fill, net_result_pct
+from quant_validation import calibrated_probability, summarize_closed_trades
 from signal_policy import POLICY_VERSION
 
 TR_TZ = ZoneInfo("Europe/Istanbul")
@@ -85,6 +87,19 @@ def init_trade_ledger():
         "policy_version",
         "TEXT NOT NULL DEFAULT 'PRE_SELECTIVE_V4'",
     )
+    for table in ("strategy_signals", "paper_trades"):
+        _ensure_column(cur, table, "execution_model_version", "TEXT")
+        _ensure_column(cur, table, "estimated_entry_cost_bps", "REAL")
+        _ensure_column(cur, table, "modeled_entry_price", "REAL")
+    _ensure_column(cur, "paper_trades", "estimated_exit_cost_bps", "REAL")
+    _ensure_column(cur, "paper_trades", "modeled_exit_price", "REAL")
+    _ensure_column(cur, "paper_trades", "gross_result_pct", "REAL")
+    _ensure_column(cur, "paper_trades", "net_result_pct", "REAL")
+    _ensure_column(cur, "strategy_signals", "calibrated_probability", "REAL")
+    _ensure_column(cur, "strategy_signals", "calibration_status", "TEXT")
+    _ensure_column(cur, "strategy_signals", "calibration_sample_size", "INTEGER")
+    _ensure_column(cur, "strategy_signals", "shadow_variant", "TEXT")
+    _ensure_column(cur, "paper_trades", "shadow_variant", "TEXT")
     _ensure_column(
         cur,
         "paper_trades",
@@ -129,6 +144,14 @@ def record_signal(signal):
     fingerprint = _fingerprint(signal)
     now = _now()
     scope = signal.get("signal_scope")
+    entry_execution = modeled_fill(signal.get("entry_price"), signal, "BUY")
+    calibration = _calibration_for_signal(signal)
+    signal["modeled_entry_price"] = entry_execution["fill_price"]
+    signal["estimated_entry_cost_bps"] = entry_execution["cost_bps"]
+    signal["execution_model_version"] = entry_execution["model_version"]
+    signal["estimated_success_probability"] = calibration["probability"]
+    signal["calibration_status"] = calibration["status"]
+    signal["calibration_sample_size"] = calibration["sample_size"]
     metadata = json.dumps(signal, ensure_ascii=False, default=str)
     policy_version = str(signal.get("policy_version") or POLICY_VERSION)
 
@@ -139,8 +162,11 @@ def record_signal(signal):
     INSERT OR IGNORE INTO strategy_signals (
         fingerprint, symbol, scope, algorithm, score,
         entry_price, stop_loss, tp1, tp2, tp3,
-        market_regime, rs_percentile, metadata_json, created_at, policy_version
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        market_regime, rs_percentile, metadata_json, created_at, policy_version,
+        execution_model_version, estimated_entry_cost_bps, modeled_entry_price,
+        calibrated_probability, calibration_status, calibration_sample_size
+        , shadow_variant
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         fingerprint,
         signal.get("symbol"),
@@ -157,6 +183,10 @@ def record_signal(signal):
         metadata,
         now.isoformat(),
         policy_version,
+        entry_execution["model_version"], entry_execution["cost_bps"],
+        entry_execution["fill_price"], calibration["probability"],
+        calibration["status"], calibration["sample_size"],
+        signal.get("shadow_variant"),
     ))
 
     inserted = cur.rowcount > 0
@@ -167,8 +197,10 @@ def record_signal(signal):
             fingerprint, symbol, scope, algorithm, status,
             entry_price, stop_loss, tp1, tp2, tp3, trailing_stop,
             max_price, min_price, opened_at, expires_at, metadata_json,
-            policy_version
-        ) VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            policy_version, execution_model_version, estimated_entry_cost_bps,
+            modeled_entry_price
+            , shadow_variant
+        ) VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             fingerprint,
             signal.get("symbol"),
@@ -185,12 +217,33 @@ def record_signal(signal):
             now.isoformat(),
             _expiry(scope).isoformat(),
             metadata,
-            policy_version,
+            policy_version, entry_execution["model_version"],
+            entry_execution["cost_bps"], entry_execution["fill_price"],
+            signal.get("shadow_variant"),
         ))
 
     conn.commit()
     conn.close()
     return inserted
+
+
+def _calibration_for_signal(signal):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT s.score, p.net_result_pct, p.result_pct
+        FROM strategy_signals s
+        JOIN paper_trades p ON p.fingerprint=s.fingerprint
+        WHERE s.scope=? AND s.algorithm=? AND p.status='CLOSED'
+        ORDER BY p.closed_at DESC
+        LIMIT 500
+        """,
+        (signal.get("signal_scope"), signal.get("main_algorithm")),
+    )
+    rows = [dict(row) for row in cur.fetchall()]
+    conn.close()
+    return calibrated_probability(signal.get("score"), rows)
 
 
 def get_open_trade_symbols():
@@ -233,6 +286,7 @@ def update_open_trades(symbol, price):
     for row in rows:
         trade = dict(row)
         entry = float(trade["entry_price"])
+        modeled_entry = float(trade["modeled_entry_price"] or entry)
         max_price = max(float(trade["max_price"] or entry), price)
         min_price = min(float(trade["min_price"] or entry), price)
         mfe = _pct(max_price, entry)
@@ -292,6 +346,14 @@ def update_open_trades(symbol, price):
 
         if exit_reason:
             result_pct = _pct(exit_price, entry)
+            signal_meta = {}
+            try:
+                signal_meta = json.loads(trade.get("metadata_json") or "{}")
+            except Exception:
+                signal_meta = {"signal_scope": trade.get("scope")}
+            exit_execution = modeled_fill(exit_price, signal_meta, "SELL")
+            modeled_exit = exit_execution["fill_price"]
+            net_result = net_result_pct(modeled_entry, modeled_exit)
             cur.execute("""
             UPDATE paper_trades
             SET status = 'CLOSED',
@@ -305,11 +367,17 @@ def update_open_trades(symbol, price):
                 exit_price = ?,
                 result_pct = ?,
                 exit_reason = ?,
-                closed_at = ?
+                closed_at = ?,
+                estimated_exit_cost_bps = ?,
+                modeled_exit_price = ?,
+                gross_result_pct = ?,
+                net_result_pct = ?
             WHERE id = ?
             """, (
                 trailing, tp1_hit, tp2_hit, max_price, min_price, mfe, mae,
-                exit_price, result_pct, exit_reason, now.isoformat(), trade["id"]
+                exit_price, result_pct, exit_reason, now.isoformat(),
+                exit_execution["cost_bps"], modeled_exit, result_pct,
+                net_result, trade["id"]
             ))
 
             events.append({
@@ -320,7 +388,10 @@ def update_open_trades(symbol, price):
                 "algorithm": trade["algorithm"],
                 "entry": entry,
                 "price": exit_price,
-                "gain_pct": result_pct,
+                "gain_pct": net_result,
+                "gross_gain_pct": result_pct,
+                "modeled_exit_price": modeled_exit,
+                "execution_model_version": exit_execution["model_version"],
                 "mfe_pct": mfe,
                 "mae_pct": mae,
             })
@@ -441,14 +512,15 @@ def _period_report(start_at, title):
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT result_pct
+        SELECT result_pct, net_result_pct
         FROM paper_trades
         WHERE policy_version=? AND status='CLOSED' AND opened_at>=?
         """,
         (POLICY_VERSION, start_at.isoformat()),
     )
-    for r in cur.fetchall():
-        value = r["result_pct"]
+    metric_rows = [dict(r) for r in cur.fetchall()]
+    for r in metric_rows:
+        value = r["net_result_pct"] if r["net_result_pct"] is not None else r["result_pct"]
         if value is None:
             continue
         value = float(value)
@@ -459,6 +531,7 @@ def _period_report(start_at, title):
     conn.close()
 
     avg_result = weighted_sum / weighted_n if weighted_n else None
+    validation = summarize_closed_trades(metric_rows)
 
     lines = [
         f"📊 <b>{title}</b>",
@@ -471,7 +544,14 @@ def _period_report(start_at, title):
     if closed_count:
         lines.append(f"✅ Pozitif kapanış: <b>{positive}</b> | ❌ Negatif kapanış: <b>{negative}</b>")
         if avg_result is not None:
-            lines.append(f"📈 Ortalama kapanış sonucu: <b>%{avg_result:.2f}</b>")
+            lines.append(f"📈 Maliyet sonrası ortalama: <b>%{avg_result:.2f}</b>")
+        if validation.get("profit_factor") is not None:
+            lines.append(f"⚖️ Profit factor: <b>{validation['profit_factor']}</b>")
+        if validation.get("max_drawdown_pct") is not None:
+            lines.append(f"📉 Sıralı maksimum düşüş: <b>%{validation['max_drawdown_pct']}</b>")
+        lines.append(
+            f"🧪 Doğrulama: <b>{validation['status']}</b> · örnek {validation['sample_size']}"
+        )
 
     lines.append("ℹ️ Açık işlemler başarısız sayılmaz; yalnız kapanmış işlemler sonuç istatistiğine girer.")
     return "\n".join(lines)

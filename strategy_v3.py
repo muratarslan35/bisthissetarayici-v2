@@ -474,6 +474,9 @@ def _base_signal(item, scope, algo, score, reasons, ctx, rs_pct, risk):
     rsi_4h = _rsi_wilder(d4["Close"], 14) if d4 is not None else None
     rsi_1d = _rsi_wilder(d1["Close"], 14) if d1 is not None else None
 
+    atr_value = _atr(d1) if d1 is not None else None
+    avg_turnover = _turnover_20d(d1) if d1 is not None else None
+
     return {
         "symbol": item.get("symbol"),
         "signal_scope": scope,
@@ -496,6 +499,8 @@ def _base_signal(item, scope, algo, score, reasons, ctx, rs_pct, risk):
         "data_confidence": item.get("data_confidence"),
         "data_age_minutes": item.get("data_age_minutes"),
         "data_source": item.get("data_source"),
+        "avg_daily_turnover_tl": round(avg_turnover, 2) if avg_turnover else None,
+        "atr_pct": round(atr_value / price * 100.0, 3) if atr_value and price else None,
         "time": _now().strftime("%H:%M:%S"),
         **risk,
     }
@@ -634,6 +639,7 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
     trend_start = False
     trend_start_score = 0.0
     trend_start_reasons = []
+    legacy_four_hour_veto_pass = False
     if c4 is not None and c1 is not None:
         e20_4 = c4.ewm(span=20, adjust=False).mean()
         e50_4 = c4.ewm(span=50, adjust=False).mean()
@@ -648,6 +654,12 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
         healthy_rsi = (
             (rsi_1d is None or 45 <= rsi_1d <= 72)
             and (rsi_4h_guard is None or 45 <= rsi_4h_guard <= 70)
+        )
+        legacy_four_hour_veto_pass = bool(
+            c4.iloc[-1] > e20_4.iloc[-1]
+            and _slope(e20_4, 4) > 0
+            and e20_4.iloc[-1] >= e50_4.iloc[-1] * 0.985
+            and rs_pct >= 0.70
         )
 
         # 4H is deliberately a scored confirmation, not a binary veto.
@@ -705,6 +717,11 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
             if sig:
                 sig["holding_horizon"] = "2-10 işlem günü"
                 sig["four_hour_confirmation_score"] = four_hour_points
+                sig["shadow_variant"] = (
+                    "CHAMPION_AND_CHALLENGER"
+                    if legacy_four_hour_veto_pass
+                    else "CHALLENGER_ONLY"
+                )
                 candidates.append(sig)
 
     # Position engine may use a verified KAP released after the previous
@@ -1234,6 +1251,14 @@ def format_v3_signal_message(signal):
 
     if signal.get("event_title"):
         lines.append(f"📰 KAP teyidi: {signal.get('event_title')}")
+
+    calibration_status = signal.get("calibration_status")
+    calibration_n = signal.get("calibration_sample_size")
+    if calibration_status == "CALIBRATED":
+        probability = float(signal.get("estimated_success_probability") or 0.0) * 100.0
+        lines.append(f"🧪 Tarihsel kalibrasyon: %{probability:.1f} · n={calibration_n}")
+    elif calibration_status:
+        lines.append(f"🧪 İstatistiksel durum: öğrenme aşaması · n={calibration_n or 0}")
 
     reasons = signal.get("reasons") or []
     if reasons:
