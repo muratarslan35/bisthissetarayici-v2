@@ -145,7 +145,7 @@ jobs:
           REMOTE
 
       - name: Send one real-data card to admin bot
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.send_admin_test }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.send_admin_test) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[send-admin-test]')) }}
         run: |
           set -Eeuo pipefail
           ssh -i ~/.ssh/key \
