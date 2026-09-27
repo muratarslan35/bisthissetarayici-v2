@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Sinyal Görseli Testi | BIST Trade</title>
+  <style>
+    *{box-sizing:border-box} body{margin:0;background:#07111f;color:#eef5ff;font-family:Segoe UI,Arial,sans-serif}
+    .wrap{max-width:1180px;margin:0 auto;padding:24px}.top{display:flex;gap:16px;align-items:center;justify-content:space-between;margin-bottom:18px}
+    h1{font-size:25px;margin:0}.muted{color:#9db0c8}.panel{background:#102238;border:1px solid #29445f;border-radius:18px;padding:18px}
+    .status{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0 18px}.pill{padding:7px 11px;border-radius:999px;background:#173452;color:#bcd7f4;font-size:13px}
+    .ok{background:#123d31;color:#5ae2a2}.warn{background:#4b3518;color:#ffd06b}.actions{display:flex;gap:10px;flex-wrap:wrap}
+    button,a.btn{border:0;border-radius:10px;padding:11px 15px;font-weight:700;cursor:pointer;text-decoration:none;background:#2f7ef7;color:white}
+    a.btn.secondary{background:#21364d}.frame{margin-top:18px;background:#050d18;border-radius:15px;padding:10px;text-align:center;min-height:400px}
+    img{max-width:100%;height:auto;border-radius:10px;display:block;margin:auto}.note{font-size:13px;line-height:1.55;margin-top:14px;color:#aebfd2}
+    @media(max-width:700px){.wrap{padding:12px}.top{align-items:flex-start;flex-direction:column}.panel{padding:12px}}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="top">
+      <div><h1>Gerçek Bot Sinyali Görsel Testi</h1><div class="muted">Telegram botuyla aynı PNG üretim fonksiyonu</div></div>
+      <a class="btn secondary" href="/admin">Yönetim paneline dön</a>
+    </div>
+    <section class="panel">
+      <div class="status">
+        <span class="pill {{ 'ok' if exact_preview_available else 'warn' }}">
+          {{ 'Son gönderilen bot PNG hazır' if exact_preview_available else 'İlk önizleme son gerçek sinyalden üretilecek' }}
+        </span>
+        {% if latest %}<span class="pill">{{ latest.symbol }} · {{ latest.main_algorithm }} · {{ latest.score }}/100</span>{% endif %}
+      </div>
+      <div class="actions">
+        <button onclick="reloadExact()">Botta Gönderilen Son Görsel</button>
+        <button onclick="rerender()">Güncel 4H ile Yeniden Üret</button>
+      </div>
+      <div class="frame"><img id="signalCard" src="/admin/test-signal-card/image?t={{ range(1,999999)|random }}" alt="Gerçek bot sinyal kartı"></div>
+      <p class="note">
+        “Botta Gönderilen Son Görsel” Telegram'a gönderilen POSITION PNG dosyasının birebir kopyasıdır.
+        “Güncel 4H ile Yeniden Üret” son gerçek sinyalin giriş/stop/hedef ve teknik kayıtlarını korur,
+        yalnız grafiği en yeni ücretsiz OHLCV mumlarıyla tekrar oluşturur; herhangi bir Telegram mesajı göndermez.
+      </p>
+    </section>
+  </main>
+  <script>
+    const img=document.getElementById('signalCard');
+    function reloadExact(){img.src='/admin/test-signal-card/image?t='+Date.now()}
+    function rerender(){img.src='/admin/test-signal-card/image?refresh=1&t='+Date.now()}
+  </script>
+</body>
+</html>
