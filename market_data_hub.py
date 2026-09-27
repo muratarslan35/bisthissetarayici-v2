@@ -11,11 +11,13 @@ TR_TZ = ZoneInfo("Europe/Istanbul")
 BATCH_SIZE = max(5, int(os.getenv("YF_BATCH_SIZE", "35")))
 BATCH_PAUSE_SECONDS = max(0.0, float(os.getenv("YF_BATCH_PAUSE_SECONDS", "0.4")))
 INTRADAY_TTL = max(120, int(os.getenv("YF_INTRADAY_TTL_SECONDS", "300")))
+HOURLY_TTL = max(600, int(os.getenv("YF_HOURLY_TTL_SECONDS", "1800")))
 DAILY_TTL = max(900, int(os.getenv("YF_DAILY_TTL_SECONDS", "21600")))
 MAX_BACKOFF = max(300, int(os.getenv("YF_MAX_BACKOFF_SECONDS", "900")))
 
 _CACHE = {
     "15m": {"data": {}, "ts": 0.0, "failures": 0, "next_allowed": 0.0},
+    "60m": {"data": {}, "ts": 0.0, "failures": 0, "next_allowed": 0.0},
     "1d": {"data": {}, "ts": 0.0, "failures": 0, "next_allowed": 0.0},
 }
 
@@ -98,13 +100,21 @@ def _download_batch(batch, interval, period):
 
 
 def _ttl(interval):
-    return INTRADAY_TTL if interval == "15m" else DAILY_TTL
+    if interval == "15m":
+        return INTRADAY_TTL
+    if interval == "60m":
+        return HOURLY_TTL
+    return DAILY_TTL
 
 
 def _period(interval):
     # 15m: enough history for EMA200 + intraday/session statistics.
     # 1d: enough warm-up for EMA200 and 20/60/120 day structures.
-    return "10d" if interval == "15m" else "2y"
+    if interval == "15m":
+        return "10d"
+    if interval == "60m":
+        return "60d"
+    return "2y"
 
 
 def _download_universe(symbols, interval):
@@ -208,7 +218,7 @@ def _resample_bist(df, rule):
     return out if not out.empty else None
 
 
-def _build_tf(intraday, daily):
+def _build_tf(intraday, daily, hourly=None):
     if intraday is None or intraday.empty or daily is None or daily.empty:
         return None
 
@@ -234,8 +244,9 @@ def _build_tf(intraday, daily):
         }
     }
 
+    structural_source = hourly if hourly is not None and not hourly.empty else d15
     for name, rule in (("1h", "1h"), ("4h", "4h")):
-        frame = _resample_bist(d15, rule)
+        frame = _resample_bist(structural_source, rule)
         if frame is None or len(frame) < 5:
             continue
         frame["ema20"] = _ema(frame["Close"], 20)
@@ -276,6 +287,7 @@ def fetch_market_snapshot(symbols):
     """
     symbols = list(dict.fromkeys(symbols))
     intraday_map = _download_universe(symbols, "15m")
+    hourly_map = _download_universe(symbols, "60m")
     daily_map = _download_universe(symbols, "1d")
     fetched_at = datetime.now(timezone.utc)
 
@@ -283,12 +295,13 @@ def fetch_market_snapshot(symbols):
 
     for symbol in symbols:
         intraday = intraday_map.get(symbol)
+        hourly = hourly_map.get(symbol)
         daily = daily_map.get(symbol)
 
         if intraday is None or intraday.empty or daily is None or daily.empty:
             continue
 
-        tf = _build_tf(intraday, daily)
+        tf = _build_tf(intraday, daily, hourly)
         if not tf:
             continue
 
@@ -342,6 +355,7 @@ def fetch_market_snapshot(symbols):
             "intraday_data_confidence": intraday_confidence,
             "structural_data_confidence": structural_confidence,
             "data_source": "YAHOO_BATCH",
+            "structural_source": "YAHOO_60M_60D" if hourly is not None and not hourly.empty else "YAHOO_15M_FALLBACK",
         })
 
     return results
