@@ -11,6 +11,7 @@ import random
 import string
 import shutil
 from pathlib import Path
+from urllib.parse import urlencode
 import pandas as pd
 
 from ultra_price_engine import start_engine
@@ -850,6 +851,8 @@ def security():
         return
 
     if request.path.startswith(f"/{ADMIN_PANEL_PATH}") or request.path.startswith("/admin"):
+        if "user" not in session:
+            return redirect("/login?" + urlencode({"next": request.full_path.rstrip("?")}))
         if not is_admin_user(session.get("user")):
             return "Unauthorized", 403
         return
@@ -881,8 +884,12 @@ def admin_required(f):
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    def safe_next(value):
+        value = str(value or "")
+        return value if value.startswith("/") and not value.startswith("//") else "/"
+
     if request.method == "GET":
-        return render_template("login.html")
+        return render_template("login.html", next_url=safe_next(request.args.get("next")))
     username = request.form.get("username")
     password = request.form.get("password")
     conn = get_connection()
@@ -894,7 +901,7 @@ def login():
         return "Login failed", 401
     register_session(username)
     conn.close()
-    return redirect("/")
+    return redirect(safe_next(request.form.get("next")))
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
