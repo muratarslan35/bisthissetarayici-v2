@@ -38,8 +38,9 @@
       <div class="frame"><img id="signalCard" src="/admin/test-signal-card/image?t={{ range(1,999999)|random }}" alt="Gerçek bot sinyal kartı"></div>
       <p class="note">
         “Botta Gönderilen Son Görsel” Telegram'a gönderilen POSITION PNG dosyasının birebir kopyasıdır.
-        “Güncel 4H ile Yeniden Üret” son gerçek sinyalin giriş/stop/hedef ve teknik kayıtlarını korur,
-        yalnız grafiği en yeni ücretsiz OHLCV mumlarıyla tekrar oluşturur; herhangi bir Telegram mesajı göndermez.
+        “Güncel 4H ile Yeniden Üret” son gerçek sinyalin giriş/stop/hedef planını korur; mum, hacim,
+        MOST, destek/direnç ve RSI uyumsuzluğunu en yeni gerçek OHLCV üzerinden yeniden hesaplar.
+        Telegram test gönderiminde veri alınamazsa simüle kart gönderilmez.
       </p>
     </section>
   </main>

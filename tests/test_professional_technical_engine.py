@@ -9,6 +9,8 @@ from professional_technical_engine import (
     chart_geometry,
     demark_sequential,
     most,
+    most_series,
+    rsi_divergence,
     smart_money_zones,
     support_resistance,
     volume_price_evidence,
@@ -33,6 +35,16 @@ class ProfessionalTechnicalEngineTests(unittest.TestCase):
         result = most(frame(np.linspace(80, 120, 80)))
         self.assertEqual(result["trend"], "UP")
         self.assertLess(result["level"], 120)
+        series = most_series(frame(np.linspace(80, 120, 80)))
+        self.assertEqual(len(series), 80)
+        self.assertAlmostEqual(float(series.iloc[-1]), result["level"], places=4)
+
+    def test_rsi_divergence_returns_explicit_state(self):
+        x = np.arange(80, dtype=float)
+        close = 100 + x * 0.05 + np.sin(x / 3.0) * 2.0
+        result = rsi_divergence(frame(close))
+        self.assertIn(result["type"], {"NONE", "BULLISH", "BEARISH"})
+        self.assertTrue(result["label"])
 
     def test_demark_counts_completed_sell_setup(self):
         result = demark_sequential(frame(np.arange(1.0, 45.0)))
@@ -71,7 +83,7 @@ class ProfessionalTechnicalEngineTests(unittest.TestCase):
         self.assertEqual(result["version"], ENGINE_VERSION)
         self.assertIn(result["phase"], {"STARTING", "EARLY_TREND", "EXTENDED", "UNCONFIRMED"})
         structures = result["structures"]
-        for key in ("support_resistance", "channels", "most", "demark", "patterns", "volume_price", "candle_zones", "market_structure"):
+        for key in ("support_resistance", "channels", "most", "demark", "patterns", "volume_price", "candle_zones", "market_structure", "rsi_context"):
             self.assertIn(key, structures)
         self.assertIn("No L2/order-book", structures["data_limit"])
 

@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from professional_technical_engine import chart_geometry
+from professional_technical_engine import chart_geometry, most_series, rsi_divergence, rsi_wilder_series
 
 TR_TZ = ZoneInfo("Europe/Istanbul")
 
@@ -106,6 +106,9 @@ def _draw_candle_chart(draw, df, box, signal, title=""):
     y = y0 + pad_t
     w = x1 - x0 - pad_l - pad_r
     h = y1 - y0 - pad_t - pad_b
+    price_h = h - 190
+    volume_y, volume_h = y + price_h + 10, 52
+    rsi_y, rsi_h = volume_y + volume_h + 22, 88
 
     _rounded(draw, box, 18, fill=(14, 28, 46), outline=GRID)
     _text(draw, (x0 + 22, y0 + 15), title, 22, WHITE, True)
@@ -140,18 +143,18 @@ def _draw_candle_chart(draw, df, box, signal, title=""):
     lo -= margin
 
     for i in range(7):
-        yy = y + i * h / 6
+        yy = y + i * price_h / 6
         draw.line((x, yy, x + w, yy), fill=GRID, width=1)
 
     # Rising-channel bands sit behind candles, like a TradingView overlay.
-    _draw_series_line(draw, channel.get("upper"), (73, 103, 135), x, w, lo, hi, y, h, 2)
-    _draw_series_line(draw, channel.get("middle"), CYAN, x, w, lo, hi, y, h, 3)
-    _draw_series_line(draw, channel.get("lower"), (73, 103, 135), x, w, lo, hi, y, h, 2)
+    _draw_series_line(draw, channel.get("upper"), (73, 103, 135), x, w, lo, hi, y, price_h, 2)
+    _draw_series_line(draw, channel.get("middle"), CYAN, x, w, lo, hi, y, price_h, 3)
+    _draw_series_line(draw, channel.get("lower"), (73, 103, 135), x, w, lo, hi, y, price_h, 2)
 
     if trend_lines.get("upper"):
-        _draw_series_line(draw, trend_lines["upper"], AMBER, x, w, lo, hi, y, h, 3)
+        _draw_series_line(draw, trend_lines["upper"], AMBER, x, w, lo, hi, y, price_h, 3)
     if trend_lines.get("lower"):
-        _draw_series_line(draw, trend_lines["lower"], GREEN, x, w, lo, hi, y, h, 3)
+        _draw_series_line(draw, trend_lines["lower"], GREEN, x, w, lo, hi, y, price_h, 3)
 
     n = len(df)
     cw = max(4, w / n)
@@ -166,18 +169,18 @@ def _draw_candle_chart(draw, df, box, signal, title=""):
             continue
         color = GREEN if c >= o else RED
         cx = x + i * cw + cw * 0.5
-        yhi = _scale_price(hh, lo, hi, y, h)
-        ylo = _scale_price(ll, lo, hi, y, h)
-        yo = _scale_price(o, lo, hi, y, h)
-        yc = _scale_price(c, lo, hi, y, h)
+        yhi = _scale_price(hh, lo, hi, y, price_h)
+        ylo = _scale_price(ll, lo, hi, y, price_h)
+        yo = _scale_price(o, lo, hi, y, price_h)
+        yc = _scale_price(c, lo, hi, y, price_h)
         draw.line((cx, yhi, cx, ylo), fill=color, width=2)
         top, bot = sorted((yo, yc))
         if bot - top < 2:
             bot = top + 2
         draw.rectangle((cx - cw * 0.26, top, cx + cw * 0.26, bot), fill=color)
         if vmax > 0 and volume is not None:
-            vh = float(volume.iloc[i]) / vmax * 54
-            draw.rectangle((cx - cw * 0.28, y + h - vh, cx + cw * 0.28, y + h), fill=(*color[:3],))
+            vh = float(volume.iloc[i]) / vmax * volume_h
+            draw.rectangle((cx - cw * 0.28, volume_y + volume_h - vh, cx + cw * 0.28, volume_y + volume_h), fill=(*color[:3],))
 
     close = pd.to_numeric(df["Close"], errors="coerce")
     for span, color in ((20, BLUE), (50, AMBER)):
@@ -186,9 +189,15 @@ def _draw_candle_chart(draw, df, box, signal, title=""):
         for i, val in enumerate(ema):
             if pd.isna(val):
                 continue
-            pts.append((x + i * cw + cw * 0.5, _scale_price(float(val), lo, hi, y, h)))
+            pts.append((x + i * cw + cw * 0.5, _scale_price(float(val), lo, hi, y, price_h)))
         if len(pts) > 1:
             draw.line(pts, fill=color, width=3)
+
+    most_values = most_series(df, period=9, percent=2.0)
+    if most_values is not None:
+        vals = [float(v) for v in most_values.tail(n)]
+        _draw_series_line(draw, vals, (218, 112, 255), x, w, lo, hi, y, price_h, 3)
+        _text(draw, (x + 10, y + price_h - 26), f"MOST(9,2) {vals[-1]:.2f}", 13, (218, 112, 255), True)
 
     structural_levels = (
         (sr4.get("support"), GREEN, "4H DESTEK", True),
@@ -201,7 +210,7 @@ def _draw_candle_chart(draw, df, box, signal, title=""):
         p = _num(price)
         if p is None:
             continue
-        yy = _scale_price(p, lo, hi, y, h)
+        yy = _scale_price(p, lo, hi, y, price_h)
         _line_with_label(draw, x, w, yy, color, f"{label} {p:.2f}", dashed, 2)
 
     pattern = geometry.get("pattern") or {}
@@ -213,13 +222,41 @@ def _draw_candle_chart(draw, df, box, signal, title=""):
     # Price axis labels and TradingView-like time markers.
     for i in range(7):
         value = hi - (hi - lo) * i / 6
-        yy = y + h * i / 6
+        yy = y + price_h * i / 6
         _text(draw, (x + w + 10, yy), f"{value:.2f}", 12, MUTED, False, "lm")
+
+    # Dedicated 4H RSI(14) panel; values are derived from the same displayed bars.
+    draw.line((x, rsi_y, x + w, rsi_y), fill=GRID, width=1)
+    rsi = rsi_wilder_series(df["Close"], 14).tail(n)
+    for level, color in ((70, RED), (50, GRID), (30, GREEN)):
+        yy = rsi_y + (100 - level) / 100 * rsi_h
+        for xx in range(int(x), int(x + w), 18):
+            draw.line((xx, yy, min(xx + 9, x + w), yy), fill=color, width=1)
+        _text(draw, (x + w + 10, yy), str(level), 11, color, False, "lm")
+    rsi_pts = []
+    for i, value in enumerate(rsi):
+        if pd.notna(value):
+            rsi_pts.append((x + i * cw + cw * 0.5, rsi_y + (100 - float(value)) / 100 * rsi_h))
+    if len(rsi_pts) > 1:
+        draw.line(rsi_pts, fill=AMBER, width=3)
+    divergence = rsi_divergence(df)
+    dtype = divergence.get("type")
+    dcolor = GREEN if dtype == "BULLISH" else RED if dtype == "BEARISH" else MUTED
+    _text(draw, (x + 8, rsi_y + 5), f"4H RSI(14) {float(rsi.dropna().iloc[-1]):.1f} · {divergence.get('label')}", 13, dcolor, True)
+    pivots = divergence.get("pivots") or []
+    if len(pivots) == 2 and all(0 <= p < n for p in pivots):
+        points = []
+        for p in pivots:
+            value = rsi.iloc[p]
+            if pd.notna(value):
+                points.append((x + p * cw + cw * 0.5, rsi_y + (100 - float(value)) / 100 * rsi_h))
+        if len(points) == 2:
+            draw.line(points, fill=dcolor, width=4)
     if isinstance(df.index, pd.DatetimeIndex):
         for i in (0, len(df) // 2, len(df) - 1):
             ts = df.index[i]
             label = ts.strftime("%d.%m\n%H:%M")
-            _text(draw, (x + i * cw + cw * 0.5, y + h + 10), label, 11, MUTED, False, "ma")
+            _text(draw, (x + i * cw + cw * 0.5, rsi_y + rsi_h + 8), label, 11, MUTED, False, "ma")
 
 
 def _metric(draw, x, y, w, title, value, color=TEXT, subtitle=None):

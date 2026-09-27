@@ -84,6 +84,7 @@ from signal_state import (
 )
 from signal_card_v3 import build_signal_card
 from signal_card_test_fixture import build_test_signal_card
+from professional_technical_engine import analyze_position_structure
 from signal_engine import (
     process_symbol_signals,
     update_success_targets,
@@ -998,6 +999,18 @@ def admin_test_signal_card_image():
         return response
     item = items[0]
     signal["current_price"] = item.get("current_price")
+    tf = item.get("tf") or {}
+    assessment = analyze_position_structure(
+        (tf.get("1d") or {}).get("df"),
+        (tf.get("4h") or {}).get("df"),
+        (tf.get("1h") or {}).get("df"),
+        item.get("current_price"),
+    )
+    signal["technical_structures"] = assessment.get("structures") or {}
+    signal["technical_confirmations"] = assessment.get("confirmations") or []
+    signal["technical_warnings"] = assessment.get("warnings") or []
+    signal["market_structure_phase"] = assessment.get("phase")
+    signal["rsi_4h"] = (tf.get("4h") or {}).get("rsi")
     image_path = build_signal_card(
         signal,
         item,
@@ -1025,23 +1038,75 @@ def admin_send_test_signal_card():
     )
     row = cur.fetchone()
     conn.close()
-    chat_id = row["telegram_chat_id"] if row else None
+    # Prefer the authenticated admin's linked chat; production ADMIN_CHAT_ID is
+    # the explicit, operator-controlled fallback for delivery tests.
+    chat_id = (row["telegram_chat_id"] if row else None) or ADMIN_CHAT_ID
     if not chat_id:
-        return jsonify({"error": "Admin hesabında kayıtlı Telegram chat_id yok"}), 400
+        return jsonify({"error": "Admin Telegram hedefi tanımlı değil"}), 400
 
-    latest = get_latest_position_signal_payload()
-    image_path, signal = build_test_signal_card(latest)
+    result, error, status = build_latest_real_admin_card()
+    if error:
+        return jsonify({"error": error}), status
+    image_path, signal = result
     archive_admin_signal_preview(image_path)
-    caption = (
-        "🧪 <b>TEST SİNYALİ — İŞLEM AÇMAYIN</b>\n"
-        f"📊 {str(signal.get('symbol') or 'TEST').replace('.IS', '')}\n"
-        "Bu gönderim yalnız bot fotoğrafı, okunabilirlik ve teslimat kontrolüdür. "
-        "Trade defterine kaydedilmemiştir."
-    )
+    caption = admin_test_signal_caption(signal)
     if not send_photo(chat_id, str(ADMIN_SIGNAL_PREVIEW), caption):
         return jsonify({"error": "Telegram fotoğraf gönderimi başarısız"}), 502
     session["last_test_signal_sent_at"] = now
-    return jsonify({"status": "sent", "recipient": "current_admin_telegram"})
+    return jsonify({"status": "sent", "recipient": "admin_telegram"})
+
+
+def admin_test_signal_caption(signal):
+    return (
+        "🧪 <b>TEST SİNYALİ — İŞLEM AÇMAYIN</b>\n"
+        f"📊 {str(signal.get('symbol') or 'TEST').replace('.IS', '')}\n"
+        "Grafik gerçek 4H OHLCV, MOST, destek/direnç ve RSI verisinden üretildi. "
+        "Trade defterine kaydedilmemiştir."
+    )
+
+
+def build_latest_real_admin_card():
+    """Build a delivery-test card exclusively from the latest real signal/data."""
+    latest = get_latest_position_signal_payload()
+    if not latest or not latest.get("symbol"):
+        return None, "Gönderilecek gerçek pozisyon sinyali bulunamadı", 404
+    items = fetch_market_snapshot([latest.get("symbol")])
+    if not items:
+        return None, "Gerçek 4H piyasa verisi alınamadı; simüle kart gönderilmedi", 503
+    item = items[0]
+    latest["current_price"] = item.get("current_price")
+    tf = item.get("tf") or {}
+    assessment = analyze_position_structure(
+        (tf.get("1d") or {}).get("df"),
+        (tf.get("4h") or {}).get("df"),
+        (tf.get("1h") or {}).get("df"),
+        item.get("current_price"),
+    )
+    latest["technical_structures"] = assessment.get("structures") or {}
+    latest["technical_confirmations"] = assessment.get("confirmations") or []
+    latest["technical_warnings"] = assessment.get("warnings") or []
+    latest["market_structure_phase"] = assessment.get("phase")
+    latest["rsi_4h"] = (tf.get("4h") or {}).get("rsi")
+    image_path = build_signal_card(
+        latest,
+        item,
+        state={"stage": latest.get("signal_stage") or "GÜÇLÜ", "history": []},
+    )
+    return (image_path, latest), None, 200
+
+
+def send_env_admin_real_test_signal():
+    """Operations hook: explicit ADMIN_CHAT_ID only, never channel/subscribers."""
+    if not ADMIN_CHAT_ID:
+        return False, "ADMIN_CHAT_ID tanımlı değil"
+    result, error, _ = build_latest_real_admin_card()
+    if error:
+        return False, error
+    image_path, signal = result
+    archive_admin_signal_preview(image_path)
+    if not send_photo(ADMIN_CHAT_ID, str(ADMIN_SIGNAL_PREVIEW), admin_test_signal_caption(signal)):
+        return False, "Telegram fotoğraf gönderimi başarısız"
+    return True, str(signal.get("symbol") or "")
 
 @app.route("/admin/users")
 @admin_required

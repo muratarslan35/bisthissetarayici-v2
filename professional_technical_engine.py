@@ -181,6 +181,66 @@ def most(df, period=9, percent=2.0):
     }
 
 
+def most_series(df, period=9, percent=2.0):
+    """Return the non-repainting MOST stop for every bar, using ``most`` rules."""
+    work = _frame(df, period + 3)
+    if work is None:
+        return None
+    close = work["Close"].astype(float)
+    mov = close.ewm(span=period, adjust=False).mean()
+    trend = 1
+    stop = float(mov.iloc[0]) * (1.0 - percent / 100.0)
+    values = [stop]
+    for i in range(1, len(close)):
+        if trend == 1:
+            stop = max(stop, float(mov.iloc[i]) * (1.0 - percent / 100.0))
+            if float(close.iloc[i]) < stop:
+                trend = -1
+                stop = float(mov.iloc[i]) * (1.0 + percent / 100.0)
+        else:
+            stop = min(stop, float(mov.iloc[i]) * (1.0 + percent / 100.0))
+            if float(close.iloc[i]) > stop:
+                trend = 1
+                stop = float(mov.iloc[i]) * (1.0 - percent / 100.0)
+        values.append(stop)
+    return pd.Series(values, index=work.index, name="MOST")
+
+
+def rsi_wilder_series(series, period=14):
+    """TradingView-compatible Wilder/RMA RSI series."""
+    values = pd.to_numeric(series, errors="coerce").astype(float)
+    delta = values.diff()
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
+    avg_gain = gain.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0.0, np.nan)
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    rsi = rsi.where(avg_loss.ne(0.0), 100.0)
+    return rsi.where(~(avg_gain.eq(0.0) & avg_loss.eq(0.0)), 50.0)
+
+
+def rsi_divergence(df, period=14, radius=2, max_bars=30):
+    """Confirm regular RSI divergence only between completed price pivots."""
+    work = _frame(df, max(period + 8, 30))
+    if work is None:
+        return {"type": "NONE", "label": "Uyumsuzluk yok"}
+    rsi = rsi_wilder_series(work["Close"], period)
+    highs, lows = _pivots(work, radius=radius, lookback=max_bars + radius * 2)
+    result = {"type": "NONE", "label": "Uyumsuzluk yok"}
+    recent_lows = [(i, p) for i, p in lows if i < len(work) - radius and pd.notna(rsi.iloc[i])]
+    recent_highs = [(i, p) for i, p in highs if i < len(work) - radius and pd.notna(rsi.iloc[i])]
+    if len(recent_lows) >= 2:
+        (i1, p1), (i2, p2) = recent_lows[-2:]
+        if i2 - i1 >= 3 and p2 < p1 and float(rsi.iloc[i2]) > float(rsi.iloc[i1]) + 1.5:
+            result = {"type": "BULLISH", "label": "Pozitif uyumsuzluk", "pivots": [i1, i2]}
+    if result["type"] == "NONE" and len(recent_highs) >= 2:
+        (i1, p1), (i2, p2) = recent_highs[-2:]
+        if i2 - i1 >= 3 and p2 > p1 and float(rsi.iloc[i2]) < float(rsi.iloc[i1]) - 1.5:
+            result = {"type": "BEARISH", "label": "Negatif uyumsuzluk", "pivots": [i1, i2]}
+    return result
+
+
 def demark_sequential(df):
     """Non-repainting TD Setup, perfection, TDST and active Countdown state."""
     work = _frame(df, 20)
@@ -500,6 +560,7 @@ def analyze_position_structure(d1, d4, d1h, price):
     flow = {"4H": volume_price_evidence(four, price), "1D": volume_price_evidence(daily, price)}
     zones = {"4H": smart_money_zones(four, price), "1D": smart_money_zones(daily, price)}
     market_structure = {"1H": structure_events(hour), "4H": structure_events(four), "1D": structure_events(daily)}
+    rsi_context = {"4H": rsi_divergence(four)}
 
     confirmations, warnings = [], []
     score = 0
@@ -516,6 +577,12 @@ def analyze_position_structure(d1, d4, d1h, price):
     if mosts["4H"].get("crossed_up"):
         confirmations.append("4H MOST yeni yukarı dönüş")
         score += 3
+    if rsi_context["4H"].get("type") == "BULLISH":
+        confirmations.append("4H RSI pozitif uyumsuzluk teyidi")
+        score += 3
+    elif rsi_context["4H"].get("type") == "BEARISH":
+        warnings.append("4H RSI negatif uyumsuzluk riski")
+        score -= 4
     if channels["4H"].get("rising") and channels["4H"].get("position", 2) < 0.85:
         confirmations.append("4H yükselen kanal içinde sağlıklı konum")
         score += 2
@@ -618,6 +685,7 @@ def analyze_position_structure(d1, d4, d1h, price):
         "volume_price": flow,
         "candle_zones": zones,
         "market_structure": market_structure,
+        "rsi_context": rsi_context,
         "data_limit": "No L2/order-book or institution identity; OHLCV evidence only",
     }
     return TechnicalAssessment(ENGINE_VERSION, phase, score, eligible, confirmations[:5], warnings[:5], structures).to_dict()

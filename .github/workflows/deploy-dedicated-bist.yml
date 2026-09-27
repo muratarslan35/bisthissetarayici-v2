@@ -2,6 +2,12 @@ name: Deploy Dedicated BIST
 
 on:
   workflow_dispatch:
+    inputs:
+      send_admin_test:
+        description: Send one real-data test card to ADMIN_CHAT_ID after deploy
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths:
@@ -136,6 +142,29 @@ jobs:
           echo "BIST_WORKER=$(sudo systemctl is-active bist-trading-worker.service)"
           find .venvs -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
           echo "DEDICATED_BIST_DEPLOY=PASS"
+          REMOTE
+
+      - name: Send one real-data card to admin bot
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.send_admin_test }}
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/key \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            ubuntu@89.168.99.141 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          cd /home/ubuntu/bistbot
+          set -a
+          source .env
+          set +a
+          venv/bin/python - <<'PY'
+          from app import send_env_admin_real_test_signal
+          ok, detail = send_env_admin_real_test_signal()
+          print("ADMIN_TEST_SENT=" + ("PASS" if ok else "FAIL"))
+          print("DETAIL=" + detail)
+          if not ok:
+              raise SystemExit(1)
+          PY
           REMOTE
 
       - name: Verify public browser access
