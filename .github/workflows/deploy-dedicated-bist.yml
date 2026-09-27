@@ -49,14 +49,22 @@ jobs:
           echo "LIVE_COMMIT=$(git rev-parse HEAD)"
 
           echo "=== PYTHON ENV ==="
-          # Build the runtime environment from scratch. This avoids carrying
-          # partially deleted/corrupted site-packages across deploys.
-          rm -rf venv
-          python3 -m venv venv
-          venv/bin/python -m pip install -q --upgrade pip setuptools wheel
-          venv/bin/python -m pip install -q -r requirements.txt
-          venv/bin/python -m compileall -q .
+          # Build dependencies beside the live environment. The active
+          # worker/web keep using the current venv until the replacement is
+          # fully installed and byte-compiled.
+          rm -rf .venv-next
+          python3 -m venv .venv-next
+          .venv-next/bin/python -m pip install -q --upgrade pip setuptools wheel
+          .venv-next/bin/python -m pip install -q -r requirements.txt
+          .venv-next/bin/python -m compileall -q .
           echo "PYTHON_COMPILE=PASS"
+
+          echo "=== ATOMIC VENV SWAP ==="
+          rm -rf .venv-prev
+          if [ -d venv ]; then
+            mv venv .venv-prev
+          fi
+          mv .venv-next venv
 
           echo "=== INSTALL DEDICATED SERVICES ==="
           bash deploy/install_dedicated_vm_services.sh /home/ubuntu/bistbot
@@ -95,6 +103,7 @@ jobs:
 
           echo "BIST_WEB=$(sudo systemctl is-active bist-trading-web.service)"
           echo "BIST_WORKER=$(sudo systemctl is-active bist-trading-worker.service)"
+          rm -rf .venv-prev
           echo "DEDICATED_BIST_DEPLOY=PASS"
           REMOTE
 
