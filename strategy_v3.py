@@ -12,7 +12,7 @@ MIN_DAILY_TURNOVER = float(os.getenv("MIN_AVG_DAILY_TURNOVER_TL", "20000000"))
 POSITION_RS_MIN = float(os.getenv("POSITION_RS_PERCENTILE_MIN", "0.75"))
 INTRADAY_RS_MIN = float(os.getenv("INTRADAY_RS_PERCENTILE_MIN", "0.85"))
 IGNITION_RS_MIN = float(os.getenv("IGNITION_RS_PERCENTILE_MIN", "0.90"))
-MAX_NEW_ENTRY_DAY_CHANGE_PCT = float(os.getenv("MAX_NEW_ENTRY_DAY_CHANGE_PCT", "8.0"))
+MAX_NEW_ENTRY_DAY_CHANGE_PCT = float(os.getenv("MAX_NEW_ENTRY_DAY_CHANGE_PCT", "9.2"))
 
 _LAST_SENT = {}
 
@@ -504,7 +504,7 @@ def _base_signal(item, scope, algo, score, reasons, ctx, rs_pct, risk):
 def evaluate_position_signals(item, ctx, kap_cache=None):
     symbol = item.get("symbol")
     price = _num(item.get("current_price"))
-    if _num(item.get("data_confidence"), 100.0) < 70:
+    if _num(item.get("structural_data_confidence"), item.get("data_confidence", 100.0)) < 70:
         return []
     d1 = _closed(_frame(item, "1d"), intraday=False)
     d4 = _closed(_frame(item, "4h"), intraday=True)
@@ -584,7 +584,7 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
             score += 7
             reasons.append("Piyasa genel görünümü pozitif")
         elif ctx.get("regime") == "RISK_OFF":
-            score -= 8
+            score -= 3
 
         structural = _num(d1["Low"].tail(10).min())
         risk = _risk_levels(price, atr_d, structural, position=True)
@@ -614,7 +614,7 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
             if ctx.get("regime") == "RISK_ON":
                 score += 6
             elif ctx.get("regime") == "RISK_OFF":
-                score -= 10
+                score -= 4
 
             risk = _risk_levels(price, atr_d, breakout - atr_d * 0.35, position=True)
             if risk and score >= 82 and _cooldown_ok(symbol, "SUPER_KOMBINE_V3", 24 * 60):
@@ -624,6 +624,68 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
                 if sig:
                     sig["holding_horizon"] = "2-10 işlem günü"
                     candidates.append(sig)
+
+    # TREND START V3: earlier swing entry before a full EMA50/EMA200
+    # breakout matures. This is the bot-side lane intended to catch a strong
+    # stock while the 4H/1H structure is turning up, rather than only after the
+    # move has already become an intraday chase.
+    c4 = d4["Close"].astype(float) if d4 is not None and len(d4) >= 25 else None
+    c1 = d1h["Close"].astype(float) if d1h is not None and len(d1h) >= 22 else None
+    trend_start = False
+    if c4 is not None and c1 is not None:
+        e20_4 = c4.ewm(span=20, adjust=False).mean()
+        e50_4 = c4.ewm(span=50, adjust=False).mean()
+        e20_1 = c1.ewm(span=20, adjust=False).mean()
+        e50_1 = c1.ewm(span=50, adjust=False).mean()
+
+        daily_early = close.iloc[-1] > ema20.iloc[-1] and _slope(ema20, 6) > 0
+        four_hour_early = (
+            c4.iloc[-1] > e20_4.iloc[-1]
+            and _slope(e20_4, 4) > 0
+            and e20_4.iloc[-1] >= e50_4.iloc[-1] * 0.985
+        )
+        one_hour_confirm = (
+            c1.iloc[-1] > e20_1.iloc[-1]
+            and e20_1.iloc[-1] >= e50_1.iloc[-1] * 0.99
+            and c1.iloc[-1] > c1.iloc[-2]
+        )
+        healthy_rsi = (
+            (rsi_1d is None or 48 <= rsi_1d <= 72)
+            and (rsi_4h_guard is None or 50 <= rsi_4h_guard <= 70)
+        )
+        trend_start = (
+            daily_early
+            and four_hour_early
+            and one_hour_confirm
+            and healthy_rsi
+            and rs_pct >= 0.70
+        )
+
+    if trend_start:
+        score = 68 + rs_pct * 18
+        reasons = [
+            "Günlük EMA20 yukarı eğimli ve fiyat üzerinde",
+            "4 saatlik yapı yukarı dönüyor",
+            "1 saatlik teyit geldi",
+            f"20 günlük göreceli güç yüzdelik: %{round(rs_pct * 100)}",
+        ]
+        if volume_ratio >= 1.05:
+            score += 5
+            reasons.append(f"Günlük hacim desteği {volume_ratio:.2f}x")
+        if ctx.get("regime") == "RISK_ON":
+            score += 4
+        elif ctx.get("regime") == "RISK_OFF":
+            score -= 2
+
+        structural = _num(d1["Low"].tail(8).min())
+        risk = _risk_levels(price, atr_d, structural, position=True)
+        if risk and score >= 77 and _cooldown_ok(symbol, "TREND_START_V3", 6 * 60):
+            sig = _base_signal(
+                item, "POSITION", "TREND_START_V3", score, reasons, ctx, rs_pct, risk
+            )
+            if sig:
+                sig["holding_horizon"] = "2-10 işlem günü"
+                candidates.append(sig)
 
     # Position engine may use a verified KAP released after the previous
     # close; keep it eligible into the next session.
@@ -665,7 +727,7 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
 def evaluate_intraday_signals(item, ctx, kap_cache=None):
     symbol = item.get("symbol")
     price = _num(item.get("current_price"))
-    if _num(item.get("data_confidence"), 100.0) < 80:
+    if _num(item.get("intraday_data_confidence"), item.get("data_confidence", 100.0)) < 80:
         return []
     d15 = _frame(item, "15m")
     d4 = _closed(_frame(item, "4h"), intraday=True)
@@ -1035,6 +1097,7 @@ def _algorithm_tr(algo):
         "KOMBINE_V3": "Kombine Trend Dönüşü",
         "SUPER_KOMBINE_V3": "Güçlü Trend Kırılımı",
         "KAP_POSITION_V3": "KAP Destekli Pozisyon",
+        "TREND_START_V3": "Yeni Trend Başlangıcı",
         "MOMENTUM_IGNITION_V3": "Erken İvme Başlangıcı",
         "INTRADAY_MOMENTUM_V3": "Gün İçi İvme Devamı",
         "KAP_EVENT_INTRADAY_V3": "KAP Destekli Gün İçi İvme",
