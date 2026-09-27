@@ -306,16 +306,30 @@ def fetch_market_snapshot(symbols):
         except Exception:
             age_minutes = 999.0
 
-        confidence = 100
+        intraday_confidence = 100
         if age_minutes > 50:
-            confidence -= 35
+            intraday_confidence -= 35
         elif age_minutes > 35:
-            confidence -= 20
+            intraday_confidence -= 20
         if len(intraday) < 200:
-            confidence -= 15
+            intraday_confidence -= 15
         if len(daily) < 220:
-            confidence -= 20
-        confidence = max(0, min(100, confidence))
+            intraday_confidence -= 20
+        intraday_confidence = max(0, min(100, intraday_confidence))
+
+        # Position/swing logic is based primarily on CLOSED daily/4H/1H
+        # structure. Do not invalidate a structurally sound setup merely
+        # because the latest 15m Yahoo bar is stale outside market hours.
+        structural_confidence = 100
+        if len(daily) < 220:
+            structural_confidence -= 35
+        d4 = tf.get("4h", {}).get("df")
+        d1h = tf.get("1h", {}).get("df")
+        if d4 is None or len(d4) < 25:
+            structural_confidence -= 25
+        if d1h is None or len(d1h) < 22:
+            structural_confidence -= 20
+        structural_confidence = max(0, min(100, structural_confidence))
 
         results.append({
             "symbol": symbol,
@@ -324,7 +338,9 @@ def fetch_market_snapshot(symbols):
             "fetched_at": fetched_at,
             "source_bar_time": bar_time,
             "data_age_minutes": round(age_minutes, 1),
-            "data_confidence": confidence,
+            "data_confidence": intraday_confidence,
+            "intraday_data_confidence": intraday_confidence,
+            "structural_data_confidence": structural_confidence,
             "data_source": "YAHOO_BATCH",
         })
 
