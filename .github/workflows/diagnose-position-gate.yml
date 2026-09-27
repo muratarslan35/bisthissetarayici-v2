@@ -1,6 +1,7 @@
 name: Diagnose Position Signal Gate
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -33,72 +34,40 @@ jobs:
           venv/bin/python - <<'PY'
           from collections import Counter
           import strategy_v3 as sv3
+          from signal_policy import select_publishable_candidates, policy_limits
           from market_data_hub import fetch_market_snapshot
           from universe_manager import get_active_universe
 
           symbols=get_active_universe()
-          print("ACTIVE_UNIVERSE",len(symbols))
           data=fetch_market_snapshot(symbols)
-          print("SNAPSHOT",len(data))
           ctx=sv3.build_market_context(data)
+
+          print("ACTIVE_UNIVERSE",len(symbols))
+          print("SNAPSHOT",len(data))
           print("REGIME",ctx.get("regime"),"BREADTH",ctx.get("breadth_intraday"),ctx.get("breadth_daily"))
 
-          counts=Counter()
+          structural=Counter()
           candidates=[]
           for item in data:
-              symbol=item.get("symbol")
-              price=sv3._num(item.get("current_price"))
-              if sv3._num(item.get("data_confidence"),100.0) < 70:
-                  counts["data_confidence"]+=1; continue
-              d1=sv3._closed(sv3._frame(item,"1d"),intraday=False)
-              d4=sv3._closed(sv3._frame(item,"4h"),intraday=True)
-              d1h=sv3._closed(sv3._frame(item,"1h"),intraday=True)
-              if not symbol or not price or d1 is None or len(d1)<220:
-                  counts["history_lt_220"]+=1; continue
-              day_change=sv3._day_change_pct(item)
-              if day_change is not None and day_change>=sv3.MAX_NEW_ENTRY_DAY_CHANGE_PCT:
-                  counts["extended_day"]+=1; continue
-              if sv3._turnover_20d(d1)<sv3.MIN_DAILY_TURNOVER:
-                  counts["turnover"]+=1; continue
-              close=d1["Close"].astype(float)
-              ema20=close.ewm(span=20,adjust=False).mean()
-              ema50=close.ewm(span=50,adjust=False).mean()
-              ema200=close.ewm(span=200,adjust=False).mean()
-              atr=sv3._atr(d1)
-              if not atr:
-                  counts["atr"]+=1; continue
-              rsi1=sv3._rsi_wilder(close,14)
-              rsi4=sv3._rsi_wilder(d4["Close"],14) if d4 is not None and len(d4)>=20 else None
-              if (rsi1 is not None and rsi1>=78) or (rsi4 is not None and rsi4>=74):
-                  counts["rsi_hot"]+=1; continue
-              rs=ctx.get("position_rank",{}).get(symbol,0.0)
-              if rs<sv3.POSITION_RS_MIN:
-                  counts["rs_rank"]+=1; continue
-              trend=(close.iloc[-1]>ema50.iloc[-1]>ema200.iloc[-1] and sv3._slope(ema50,10)>0)
-              if not trend:
-                  counts["daily_trend"]+=1; continue
-              four=False
-              if d4 is not None and len(d4)>=25:
-                  c4=d4["Close"].astype(float); e20=c4.ewm(span=20,adjust=False).mean(); e50=c4.ewm(span=50,adjust=False).mean()
-                  four=e20.iloc[-1]>e50.iloc[-1]
-              if not four:
-                  counts["4h_trend"]+=1; continue
-              one=False
-              if d1h is not None and len(d1h)>=22:
-                  c1=d1h["Close"].astype(float); e20=c1.ewm(span=20,adjust=False).mean()
-                  one=c1.iloc[-1]>=e20.iloc[-1] and c1.iloc[-1]>c1.iloc[-2]
-              if not one:
-                  counts["1h_turn"]+=1; continue
-              counts["base_pass"]+=1
+              structural[str(item.get("structural_data_confidence"))]+=1
               out=sv3.evaluate_position_signals(item,ctx,kap_cache={})
-              if out:
-                  candidates.extend(out)
-              else:
-                  counts["strategy_pattern_or_score"]+=1
+              candidates.extend(out)
 
-          print("GATES",dict(counts))
+          selected=select_publishable_candidates(candidates,"POSITION")
+          print("STRUCTURAL_CONFIDENCE",dict(structural))
           print("POSITION_CANDIDATES",len(candidates))
-          for sig in sorted(candidates,key=lambda x:x.get("score",0),reverse=True)[:20]:
-              print("CAND",sig.get("symbol"),sig.get("main_algorithm"),sig.get("score"),sig.get("day_change_pct"))
+          print("POSITION_PUBLISHABLE",len(selected))
+          print("POLICY",policy_limits())
+          for sig in sorted(selected,key=lambda x:x.get("score",0),reverse=True)[:30]:
+              print(
+                  "CAND",
+                  sig.get("symbol"),
+                  sig.get("main_algorithm"),
+                  sig.get("score"),
+                  "day",sig.get("day_change_pct"),
+                  "rsi4",sig.get("rsi_4h"),
+                  "rsi1",sig.get("rsi_1d"),
+                  "rs",sig.get("relative_strength_percentile"),
+              )
           PY
           REMOTE
