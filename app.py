@@ -66,6 +66,13 @@ from dashboard_store import (
 )
 from resource_guard import host_pressure_state
 from signal_policy import select_publishable_candidates, policy_limits
+from signal_state import (
+    init_signal_state,
+    assess_signal_transition,
+    mark_signal_state_closed,
+    get_signal_state,
+)
+from signal_card_v3 import build_signal_card
 from signal_engine import (
     process_symbol_signals,
     update_success_targets,
@@ -152,6 +159,7 @@ app.register_blueprint(dashboard_bp)
 
 init_db()
 init_trade_ledger()
+init_signal_state()
 init_dashboard_store()
 
 # ======================================================
@@ -309,30 +317,36 @@ def send_photo(chat_id, image_path, caption=None):
 
     global LAST_SEND_TIME
 
+    if not TELEGRAM_TOKEN or not chat_id or not image_path:
+        return False
+
     try:
-        # 🚦 RATE LIMIT
         now = time.time()
         if now - LAST_SEND_TIME < 0.4:
             time.sleep(0.4)
 
         LAST_SEND_TIME = time.time()
-
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
 
         with open(image_path, "rb") as f:
-            requests.post(
+            response = requests.post(
                 url,
                 data={
                     "chat_id": chat_id,
-                    "caption": caption
+                    "caption": caption or "",
+                    "parse_mode": "HTML",
                 },
                 files={"photo": f},
-                timeout=10
+                timeout=15,
             )
-
+        data = response.json() if response.content else {}
+        if not response.ok or not data.get("ok"):
+            print("Photo send rejected:", response.status_code, data, flush=True)
+            return False
+        return True
     except Exception as e:
-        print("Photo send error:", e)
-
+        print("Photo send error:", e, flush=True)
+        return False
 
 def send_report_to_admins(text):
     for cid in REPORT_CHAT_IDS:
@@ -384,6 +398,99 @@ def broadcast_signal(msg):
 
         except Exception as e:
             print(f"Broadcast error ({cid}):", e)
+
+def broadcast_signal_photo(image_path, caption):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT telegram_chat_id
+        FROM users
+        WHERE is_active = 1
+          AND telegram_chat_id IS NOT NULL
+    """)
+    users = cur.fetchall()
+    conn.close()
+
+    sent = 0
+    for row in users:
+        try:
+            cid = int(row["telegram_chat_id"])
+            if send_photo(cid, image_path, caption):
+                sent += 1
+            time.sleep(0.05)
+        except Exception as exc:
+            print(f"Broadcast photo error ({row['telegram_chat_id']}): {exc}", flush=True)
+    return sent
+
+
+def _upgrade_caption(signal, transition):
+    symbol = str(signal.get("symbol") or "").replace(".IS", "")
+    stage = transition.get("stage") or "GÜÇLÜ"
+    prev = transition.get("previous_score")
+    score = signal.get("score")
+    price = signal.get("current_price") or signal.get("entry_price")
+    return (
+        f"🔥 <b>{symbol} · GÜÇLENEN SİNYAL</b>\n"
+        f"Seviye: <b>{stage}</b> · Güç {prev} → <b>{score}/100</b>\n"
+        f"Canlı fiyat: <b>{price}</b>\n"
+        f"Mevcut işlem takibi korunuyor; yeni işlem açılmadı."
+    )
+
+
+def publish_v5_signal(signal, item):
+    transition = assess_signal_transition(signal)
+    action = transition.get("action")
+    if action == "NONE":
+        return False
+
+    signal["signal_stage"] = transition.get("stage")
+    state = get_signal_state(signal.get("symbol"), signal.get("signal_scope")) or transition
+
+    if action == "NEW":
+        if not record_signal(signal):
+            return False
+        push_signal(signal)
+        caption = format_v3_signal_message(signal)
+    else:
+        caption = _upgrade_caption(signal, transition)
+
+    image_path = None
+    try:
+        image_path = build_signal_card(signal, item or {}, state=state)
+    except Exception as exc:
+        print("V5 CARD ERROR:", exc, flush=True)
+
+    try:
+        if signal.get("signal_scope") == "POSITION":
+            if image_path and os.path.exists(image_path):
+                delivered = broadcast_signal_photo(image_path, caption)
+                if delivered == 0:
+                    broadcast_signal(caption)
+            else:
+                broadcast_signal(caption)
+        else:
+            if image_path and os.path.exists(image_path):
+                if not send_photo(CHANNEL_ID, image_path, caption):
+                    send_to_channel(caption)
+            else:
+                send_to_channel(caption)
+    finally:
+        if image_path:
+            try:
+                os.remove(image_path)
+            except Exception:
+                pass
+
+    print(
+        "V5_SIGNAL_PUBLISHED "
+        f"action={action} scope={signal.get('signal_scope')} "
+        f"symbol={signal.get('symbol')} score={signal.get('score')} "
+        f"stage={transition.get('stage')}",
+        flush=True,
+    )
+    return True
+
+
 # ======================================================
 # 🚀 MOMENTUM SIGNAL (IMAGE + CHART)
 # ======================================================
@@ -1166,6 +1273,10 @@ def fast_lane_loop():
                 # stops/TP milestones do not wait for the 5-minute broad cache.
                 if symbol in open_symbols:
                     for event in safe_update_open_trades(symbol, quote.get("price")):
+                        if event.get("type") == "CLOSE":
+                            mark_signal_state_closed(
+                                symbol, event.get("scope"), event.get("reason")
+                            )
                         msg = format_trade_event(event)
                         if event.get("scope") == "INTRADAY":
                             send_to_channel(msg)
@@ -1196,15 +1307,7 @@ def fast_lane_loop():
                         fast_candidates, "INTRADAY", cycle_cap=1
                     )
                     for sig in selected_fast:
-                        if record_signal(sig):
-                            push_signal(sig)
-                            send_to_channel(format_v3_signal_message(sig))
-                            print(
-                                "FAST_SIGNAL_SELECTED "
-                                f"symbol={symbol} algo={sig.get('main_algorithm')} "
-                                f"score={sig.get('score')} policy={sig.get('policy_version')}",
-                                flush=True,
-                            )
+                        publish_v5_signal(sig, item)
 
         except Exception as exc:
             print(f"FAST LANE ERROR: {exc}", flush=True)
@@ -1460,6 +1563,11 @@ def scanner_loop():
 
             cycle_position_candidates = []
             cycle_intraday_candidates = []
+            cycle_items = {
+                item.get("symbol"): item
+                for item in market_data
+                if item.get("symbol")
+            }
 
             for item in market_data:
 
@@ -1828,24 +1936,14 @@ Zarar: %{round((price-entry)/entry*100,2)}
                     )
 
                     for sig in selected_positions:
-                        if record_signal(sig):
-                            push_signal(sig)
-                            broadcast_signal(format_v3_signal_message(sig))
-                            print(
-                                "POSITION_SIGNAL_SELECTED "
-                                f"symbol={sig.get('symbol')} score={sig.get('score')}",
-                                flush=True,
-                            )
+                        publish_v5_signal(
+                            sig, cycle_items.get(sig.get("symbol"), {})
+                        )
 
                     for sig in selected_intraday:
-                        if record_signal(sig):
-                            push_signal(sig)
-                            send_to_channel(format_v3_signal_message(sig))
-                            print(
-                                "INTRADAY_SIGNAL_SELECTED "
-                                f"symbol={sig.get('symbol')} score={sig.get('score')}",
-                                flush=True,
-                            )
+                        publish_v5_signal(
+                            sig, cycle_items.get(sig.get("symbol"), {})
+                        )
 
                     if selected_positions or selected_intraday:
                         print(
