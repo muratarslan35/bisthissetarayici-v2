@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from database import get_connection
+from quant_validation import summarize_closed_trades
 from signal_policy import POLICY_VERSION
 
 TR_TZ = ZoneInfo("Europe/Istanbul")
@@ -210,6 +211,13 @@ def _signal_rows(cur, scope, limit=80):
         s.market_regime,
         s.rs_percentile,
         s.created_at,
+        s.execution_model_version,
+        s.estimated_entry_cost_bps,
+        s.modeled_entry_price,
+        s.calibrated_probability,
+        s.calibration_status,
+        s.calibration_sample_size,
+        s.shadow_variant,
         p.status,
         p.trailing_stop,
         p.tp1_hit,
@@ -220,6 +228,10 @@ def _signal_rows(cur, scope, limit=80):
         p.mae_pct,
         p.exit_price,
         p.result_pct,
+        p.gross_result_pct,
+        p.net_result_pct,
+        p.modeled_exit_price,
+        p.estimated_exit_cost_bps,
         p.exit_reason,
         p.opened_at,
         p.expires_at,
@@ -259,6 +271,8 @@ def _signal_rows(cur, scope, limit=80):
         d["event_title"] = metadata.get("event_title")
 
         current = d.get("current_price")
+        # UI live move remains the transparent quote-to-quote change.  The
+        # validation block separately reports conservative modeled net return.
         entry = d.get("entry_price")
         d["live_gain_pct"] = None
         if isinstance(current, (int, float)) and isinstance(entry, (int, float)) and entry:
@@ -277,12 +291,12 @@ def _performance(cur, days=30):
         scope,
         algorithm,
         COUNT(*) AS closed_trades,
-        SUM(CASE WHEN result_pct > 0 THEN 1 ELSE 0 END) AS winning_trades,
-        AVG(result_pct) AS avg_result_pct,
+        SUM(CASE WHEN COALESCE(net_result_pct, result_pct) > 0 THEN 1 ELSE 0 END) AS winning_trades,
+        AVG(COALESCE(net_result_pct, result_pct)) AS avg_result_pct,
         AVG(mfe_pct) AS avg_mfe_pct,
         AVG(mae_pct) AS avg_mae_pct,
-        MAX(result_pct) AS best_result_pct,
-        MIN(result_pct) AS worst_result_pct
+        MAX(COALESCE(net_result_pct, result_pct)) AS best_result_pct,
+        MIN(COALESCE(net_result_pct, result_pct)) AS worst_result_pct
     FROM paper_trades
     WHERE status = 'CLOSED'
       AND policy_version = ?
@@ -329,7 +343,10 @@ def _performance(cur, days=30):
 def _recent_closed(cur, limit=40):
     cur.execute("""
     SELECT
-        symbol, scope, algorithm, entry_price, exit_price, result_pct,
+        symbol, scope, algorithm, entry_price, modeled_entry_price,
+        exit_price, modeled_exit_price, result_pct, gross_result_pct,
+        net_result_pct, estimated_entry_cost_bps, estimated_exit_cost_bps,
+        execution_model_version, shadow_variant,
         mfe_pct, mae_pct, exit_reason, opened_at, closed_at
     FROM paper_trades
     WHERE status = 'CLOSED'
@@ -339,6 +356,33 @@ def _recent_closed(cur, limit=40):
     """, (POLICY_VERSION, int(limit)))
 
     return [dict(r) for r in cur.fetchall()]
+
+
+def _validation(cur, days=90):
+    since = (_now() - timedelta(days=days)).isoformat()
+    cur.execute(
+        """
+        SELECT p.scope, p.algorithm, s.score, p.result_pct, p.net_result_pct,
+               p.shadow_variant, p.closed_at
+        FROM paper_trades p
+        LEFT JOIN strategy_signals s ON s.fingerprint=p.fingerprint
+        WHERE p.status='CLOSED' AND p.policy_version=? AND p.closed_at>=?
+        ORDER BY p.closed_at
+        """,
+        (POLICY_VERSION, since),
+    )
+    rows = [dict(row) for row in cur.fetchall()]
+    by_scope = {}
+    for scope in ("POSITION", "INTRADAY"):
+        by_scope[scope] = summarize_closed_trades(
+            [row for row in rows if row.get("scope") == scope]
+        )
+    return {
+        "window_days": days,
+        "all": summarize_closed_trades(rows),
+        "by_scope": by_scope,
+        "uses_net_execution_results": True,
+    }
 
 
 def get_dashboard_data():
@@ -351,6 +395,7 @@ def get_dashboard_data():
         "position_signals": _signal_rows(cur, "POSITION", 80),
         "intraday_signals": _signal_rows(cur, "INTRADAY", 100),
         "performance": _performance(cur, 30),
+        "validation": _validation(cur, 90),
         "recent_closed": _recent_closed(cur, 40),
     }
 

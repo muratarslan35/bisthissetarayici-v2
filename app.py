@@ -59,6 +59,12 @@ from trade_ledger import (
     build_v4_daily_report,
     build_v4_weekly_report,
 )
+from signal_routing import (
+    BOT_SUBSCRIBERS,
+    TELEGRAM_CHANNEL,
+    enrich_routing,
+    route_trade_event,
+)
 from dashboard_store import (
     init_dashboard_store,
     update_worker_heartbeat,
@@ -438,6 +444,7 @@ def _upgrade_caption(signal, transition):
 
 
 def publish_v5_signal(signal, item):
+    signal = enrich_routing(signal)
     transition = assess_signal_transition(signal)
     action = transition.get("action")
     if action == "NONE":
@@ -461,14 +468,15 @@ def publish_v5_signal(signal, item):
         print("V5 CARD ERROR:", exc, flush=True)
 
     try:
-        if signal.get("signal_scope") == "POSITION":
+        destination = signal.get("delivery_destination")
+        if destination == BOT_SUBSCRIBERS:
             if image_path and os.path.exists(image_path):
                 delivered = broadcast_signal_photo(image_path, caption)
                 if delivered == 0:
                     broadcast_signal(caption)
             else:
                 broadcast_signal(caption)
-        else:
+        elif destination == TELEGRAM_CHANNEL:
             if image_path and os.path.exists(image_path):
                 if not send_photo(CHANNEL_ID, image_path, caption):
                     send_to_channel(caption)
@@ -1278,7 +1286,7 @@ def fast_lane_loop():
                                 symbol, event.get("scope"), event.get("reason")
                             )
                         msg = format_trade_event(event)
-                        if event.get("scope") == "INTRADAY":
+                        if route_trade_event(event) == TELEGRAM_CHANNEL:
                             send_to_channel(msg)
                         else:
                             broadcast_signal(msg)
@@ -1615,7 +1623,7 @@ def scanner_loop():
                         if symbol in open_trade_symbols:
                             for event in safe_update_open_trades(symbol, price):
                                 event_msg = format_trade_event(event)
-                                if event.get("scope") == "INTRADAY":
+                                if route_trade_event(event) == TELEGRAM_CHANNEL:
                                     send_to_channel(event_msg)
                                 else:
                                     broadcast_signal(event_msg)

@@ -1,0 +1,138 @@
+import os
+import sqlite3
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import trade_ledger
+import dashboard_store
+from execution_model import bist_tick_size, modeled_fill, net_result_pct
+from quant_validation import calibrated_probability, summarize_closed_trades
+from signal_routing import (
+    BOT_SUBSCRIBERS,
+    TELEGRAM_CHANNEL,
+    destination_for_scope,
+    enrich_routing,
+)
+
+
+class ExecutionModelTests(unittest.TestCase):
+    def test_buy_is_worse_and_sell_is_worse_than_quote(self):
+        signal = {
+            "signal_scope": "INTRADAY",
+            "avg_daily_turnover_tl": 25_000_000,
+            "atr_pct": 3.0,
+            "data_age_minutes": 2,
+        }
+        buy = modeled_fill(100.0, signal, "BUY")
+        sell = modeled_fill(100.0, signal, "SELL")
+        self.assertGreater(buy["fill_price"], 100.0)
+        self.assertLess(sell["fill_price"], 100.0)
+        self.assertLess(net_result_pct(buy["fill_price"], sell["fill_price"]), 0)
+
+    def test_tick_size_is_price_sensitive(self):
+        self.assertEqual(bist_tick_size(10), 0.01)
+        self.assertEqual(bist_tick_size(100), 0.10)
+        self.assertEqual(bist_tick_size(1200), 1.00)
+
+
+class SignalRoutingTests(unittest.TestCase):
+    def test_position_goes_only_to_bot_subscribers(self):
+        signal = enrich_routing({"signal_scope": "POSITION"})
+        self.assertEqual(signal["delivery_destination"], BOT_SUBSCRIBERS)
+        self.assertEqual(signal["holding_horizon"], "2-10 işlem günü")
+
+    def test_intraday_goes_only_to_channel(self):
+        signal = enrich_routing({"signal_scope": "INTRADAY"})
+        self.assertEqual(signal["delivery_destination"], TELEGRAM_CHANNEL)
+        self.assertEqual(signal["holding_horizon"], "aynı işlem günü")
+
+    def test_unknown_scope_fails_closed(self):
+        with self.assertRaises(ValueError):
+            destination_for_scope("SCALP_UNKNOWN")
+
+
+class QuantValidationTests(unittest.TestCase):
+    def test_metrics_use_net_results(self):
+        rows = [
+            {"result_pct": 2.0, "net_result_pct": 1.5},
+            {"result_pct": -1.0, "net_result_pct": -1.4},
+            {"result_pct": 3.0, "net_result_pct": 2.2},
+        ]
+        result = summarize_closed_trades(rows)
+        self.assertEqual(result["sample_size"], 3)
+        self.assertEqual(result["status"], "LEARNING")
+        self.assertAlmostEqual(result["expectancy_pct"], (1.5 - 1.4 + 2.2) / 3, places=4)
+
+    def test_small_sample_never_claims_certainty(self):
+        rows = [{"score": 82, "net_result_pct": 1.0} for _ in range(4)]
+        result = calibrated_probability(82, rows)
+        self.assertEqual(result["status"], "LEARNING")
+        self.assertLess(result["probability"], 1.0)
+
+
+class LedgerMigrationTests(unittest.TestCase):
+    def setUp(self):
+        handle = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.db_path = handle.name
+        handle.close()
+
+        def connection():
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            return conn
+
+        self.connection_patch = patch.object(trade_ledger, "get_connection", connection)
+        self.dashboard_connection_patch = patch.object(
+            dashboard_store, "get_connection", connection
+        )
+        self.connection_patch.start()
+        self.dashboard_connection_patch.start()
+        trade_ledger.init_trade_ledger()
+
+    def tearDown(self):
+        self.connection_patch.stop()
+        self.dashboard_connection_patch.stop()
+        try:
+            os.remove(self.db_path)
+        except OSError:
+            pass
+
+    def test_new_signal_persists_execution_and_calibration_fields(self):
+        signal = {
+            "symbol": "TEST.IS",
+            "signal_scope": "POSITION",
+            "main_algorithm": "TREND_START_V3",
+            "score": 82,
+            "entry_price": 100.0,
+            "stop_loss": 96.0,
+            "tp1": 106.0,
+            "tp2": 112.0,
+            "tp3": 120.0,
+            "market_regime": "RISK_ON",
+            "relative_strength_percentile": 90,
+            "avg_daily_turnover_tl": 150_000_000,
+            "atr_pct": 2.5,
+            "data_age_minutes": 1,
+        }
+        self.assertTrue(trade_ledger.record_signal(signal))
+        conn = trade_ledger.get_connection()
+        row = conn.execute("SELECT * FROM paper_trades").fetchone()
+        conn.close()
+        self.assertGreater(row["modeled_entry_price"], row["entry_price"])
+        self.assertGreater(row["estimated_entry_cost_bps"], 0)
+        self.assertIsNotNone(row["execution_model_version"])
+
+        events = trade_ledger.update_open_trades("TEST.IS", 121.0)
+        close = [event for event in events if event.get("type") == "CLOSE"]
+        self.assertEqual(len(close), 1)
+        self.assertLess(close[0]["gain_pct"], close[0]["gross_gain_pct"])
+
+        dashboard_store.init_dashboard_store()
+        payload = dashboard_store.get_dashboard_data()
+        self.assertIn("validation", payload)
+        self.assertTrue(payload["validation"]["uses_net_execution_results"])
+
+
+if __name__ == "__main__":
+    unittest.main()
