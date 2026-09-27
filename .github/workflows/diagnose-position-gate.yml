@@ -1,4 +1,5 @@
 name: Diagnose Position Signal Gate
+# Re-run after adaptive 4H scoring
 
 on:
   workflow_dispatch:
