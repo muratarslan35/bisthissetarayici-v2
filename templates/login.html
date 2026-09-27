@@ -141,6 +141,7 @@ button:hover{
 <div class="panel-wrapper">
 <form class="login-box" method="POST">
     <h1>BIST TRADE PANELİ</h1>
+    <input type="hidden" name="next" value="{{ next_url or '/' }}">
 
     <div class="input-group">
         <input type="text" name="username" placeholder="Kullanıcı Adı" required autocomplete="off">
