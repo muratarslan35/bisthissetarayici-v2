@@ -45,44 +45,75 @@ jobs:
           echo "=== SYNC CODE ==="
           git fetch --prune origin
           git reset --hard origin/main
-          git clean -fd             -e .env             -e system.db             -e data/             -e fallback_state.json             -e successful_signals.json
+          git clean -fd \
+            -e '.env' \
+            -e 'system.db' \
+            -e 'data/' \
+            -e 'venv' \
+            -e 'venv/' \
+            -e '.venvs/' \
+            -e 'cards/' \
+            -e 'fallback_state.json' \
+            -e 'successful_signals.json'
           echo "LIVE_COMMIT=$(git rev-parse HEAD)"
 
           echo "=== PYTHON ENV ==="
-          # Build dependencies beside the live environment. The active
-          # worker/web keep using the current venv until the replacement is
-          # fully installed and byte-compiled.
-          rm -rf .venv-next
-          python3 -m venv .venv-next
-          .venv-next/bin/python -m pip install -q --upgrade pip setuptools wheel
-          .venv-next/bin/python -m pip install -q -r requirements.txt
-          .venv-next/bin/python -m compileall -q .
+          mkdir -p .venvs
+          release="$(git rev-parse --short=12 HEAD)"
+          next_venv="$PWD/.venvs/$release"
+          rm -rf "$next_venv"
+          python3 -m venv "$next_venv"
+          "$next_venv/bin/python" -m pip install -q --upgrade pip setuptools wheel
+          "$next_venv/bin/python" -m pip install -q -r requirements.txt
+          "$next_venv/bin/python" -m compileall -q .
           echo "PYTHON_COMPILE=PASS"
 
-          echo "=== ATOMIC VENV SWAP ==="
-          rm -rf .venv-prev
-          if [ -d venv ]; then
-            mv venv .venv-prev
+          echo "=== ATOMIC VENV SWITCH ==="
+          previous_target=""
+          if [ -L venv ]; then
+            previous_target="$(readlink -f venv || true)"
+          elif [ -d venv ]; then
+            legacy="$PWD/.venvs/legacy-$(date +%Y%m%dT%H%M%S)"
+            mv venv "$legacy"
+            previous_target="$legacy"
           fi
-          mv .venv-next venv
+
+          ln -s "$next_venv" venv.next
+          mv -Tf venv.next venv
+          test -x venv/bin/python
+          test -x venv/bin/gunicorn
+          echo "VENV_SWITCH=PASS"
 
           echo "=== INSTALL DEDICATED SERVICES ==="
           bash deploy/install_dedicated_vm_services.sh /home/ubuntu/bistbot
 
-          for i in $(seq 1 20); do
+          healthy=0
+          for i in $(seq 1 30); do
             web=$(sudo systemctl is-active bist-trading-web.service || true)
             worker=$(sudo systemctl is-active bist-trading-worker.service || true)
-            if [ "$web" = active ] && [ "$worker" = active ]; then
+            if [ "$web" = active ] && [ "$worker" = active ] && \
+               curl --fail --silent --show-error --max-time 3 \
+                 http://127.0.0.1:5000/health >/tmp/bist-health.json 2>/dev/null; then
+              healthy=1
               break
             fi
             sleep 2
           done
 
-          test "$(sudo systemctl is-active bist-trading-web.service)" = active
-          test "$(sudo systemctl is-active bist-trading-worker.service)" = active
+          if [ "$healthy" != 1 ]; then
+            echo "New release failed health check" >&2
+            sudo journalctl -u bist-trading-web.service --since "5 minutes ago" --no-pager | tail -100 || true
+            sudo journalctl -u bist-trading-worker.service --since "5 minutes ago" --no-pager | tail -100 || true
+            if [ -n "$previous_target" ] && [ -d "$previous_target" ]; then
+              rm -f venv
+              ln -s "$previous_target" venv
+              bash deploy/install_dedicated_vm_services.sh /home/ubuntu/bistbot || true
+              echo "VENV_ROLLBACK_ATTEMPTED=1"
+            fi
+            exit 1
+          fi
 
           echo "=== HEALTH ==="
-          curl --fail --silent --show-error http://127.0.0.1:5000/health >/tmp/bist-health.json
           venv/bin/python - <<'PY'
           import json
           from universe_manager import universe_status
@@ -103,7 +134,7 @@ jobs:
 
           echo "BIST_WEB=$(sudo systemctl is-active bist-trading-web.service)"
           echo "BIST_WORKER=$(sudo systemctl is-active bist-trading-worker.service)"
-          rm -rf .venv-prev
+          find .venvs -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
           echo "DEDICATED_BIST_DEPLOY=PASS"
           REMOTE
 
