@@ -3,11 +3,14 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+
+from professional_technical_engine import chart_geometry
 
 TR_TZ = ZoneInfo("Europe/Istanbul")
 
-W, H = 1280, 1120
+W, H = 1440, 1680
 BG = (10, 20, 34)
 PANEL = (20, 38, 60)
 PANEL2 = (25, 48, 75)
@@ -74,26 +77,60 @@ def _ema(series, span):
     return pd.to_numeric(series, errors="coerce").astype(float).ewm(span=span, adjust=False).mean()
 
 
-def _draw_candle_chart(draw, df, box, entry=None, stop=None, target=None, title=""):
+def _line_with_label(draw, x, w, yy, color, label, dash=False, width=2):
+    if dash:
+        for xx in range(int(x), int(x + w), 18):
+            draw.line((xx, yy, min(xx + 10, x + w), yy), fill=color, width=width)
+    else:
+        draw.line((x, yy, x + w, yy), fill=color, width=width)
+    _rounded(draw, (x + w - 116, yy - 13, x + w + 2, yy + 13), 6, fill=(11, 23, 38))
+    _text(draw, (x + w - 8, yy), label, 13, color, True, "rm")
+
+
+def _draw_series_line(draw, values, color, x, w, lo, hi, y, h, width=2):
+    if not values or any(_num(v) is None for v in values):
+        return
+    pts = []
+    count = len(values)
+    for i, value in enumerate(values):
+        xx = x + (i / max(count - 1, 1)) * w
+        pts.append((xx, _scale_price(float(value), lo, hi, y, h)))
+    if len(pts) > 1:
+        draw.line(pts, fill=color, width=width)
+
+
+def _draw_candle_chart(draw, df, box, signal, title=""):
     x0, y0, x1, y1 = box
-    pad_l, pad_r, pad_t, pad_b = 54, 68, 44, 34
+    pad_l, pad_r, pad_t, pad_b = 66, 92, 64, 58
     x = x0 + pad_l
     y = y0 + pad_t
     w = x1 - x0 - pad_l - pad_r
     h = y1 - y0 - pad_t - pad_b
 
     _rounded(draw, box, 18, fill=(14, 28, 46), outline=GRID)
-    _text(draw, (x0 + 18, y0 + 12), title, 20, MUTED, True)
+    _text(draw, (x0 + 22, y0 + 15), title, 22, WHITE, True)
+    _text(draw, (x1 - 22, y0 + 18), "Mum · Hacim · EMA20/50 · Yapı", 15, MUTED, False, "ra")
 
     if df is None or len(df) < 8:
         _text(draw, ((x0 + x1) / 2, (y0 + y1) / 2), "Mum verisi yok", 26, MUTED, True, "mm")
         return
 
-    df = df.tail(42).copy()
+    df = df.tail(60).copy()
+    geometry = chart_geometry(df)
+    structures = signal.get("technical_structures") or {}
+    sr4 = (structures.get("support_resistance") or {}).get("4H") or {}
+    entry = _num(signal.get("entry_price"))
+    stop = _num(signal.get("stop_loss"))
+    target = _num(signal.get("tp1"))
     hi = float(pd.to_numeric(df["High"], errors="coerce").max())
     lo = float(pd.to_numeric(df["Low"], errors="coerce").min())
 
-    levels = [v for v in (entry, stop, target) if _num(v) is not None]
+    channel = geometry.get("channel") or {}
+    trend_lines = geometry.get("trend_lines") or {}
+    extra = []
+    for values in list(channel.values()) + list(trend_lines.values()):
+        extra.extend([_num(v) for v in values if _num(v) is not None])
+    levels = [v for v in (entry, stop, target, sr4.get("support"), sr4.get("resistance")) if _num(v) is not None] + extra
     if levels:
         hi = max(hi, max(levels))
         lo = min(lo, min(levels))
@@ -102,12 +139,24 @@ def _draw_candle_chart(draw, df, box, entry=None, stop=None, target=None, title=
     hi += margin
     lo -= margin
 
-    for i in range(6):
-        yy = y + i * h / 5
+    for i in range(7):
+        yy = y + i * h / 6
         draw.line((x, yy, x + w, yy), fill=GRID, width=1)
+
+    # Rising-channel bands sit behind candles, like a TradingView overlay.
+    _draw_series_line(draw, channel.get("upper"), (73, 103, 135), x, w, lo, hi, y, h, 2)
+    _draw_series_line(draw, channel.get("middle"), CYAN, x, w, lo, hi, y, h, 3)
+    _draw_series_line(draw, channel.get("lower"), (73, 103, 135), x, w, lo, hi, y, h, 2)
+
+    if trend_lines.get("upper"):
+        _draw_series_line(draw, trend_lines["upper"], AMBER, x, w, lo, hi, y, h, 3)
+    if trend_lines.get("lower"):
+        _draw_series_line(draw, trend_lines["lower"], GREEN, x, w, lo, hi, y, h, 3)
 
     n = len(df)
     cw = max(4, w / n)
+    volume = pd.to_numeric(df.get("Volume"), errors="coerce") if "Volume" in df else None
+    vmax = float(volume.max()) if volume is not None and not volume.empty else 0.0
     for i, row in enumerate(df.itertuples()):
         o = _num(getattr(row, "Open"))
         c = _num(getattr(row, "Close"))
@@ -126,6 +175,9 @@ def _draw_candle_chart(draw, df, box, entry=None, stop=None, target=None, title=
         if bot - top < 2:
             bot = top + 2
         draw.rectangle((cx - cw * 0.26, top, cx + cw * 0.26, bot), fill=color)
+        if vmax > 0 and volume is not None:
+            vh = float(volume.iloc[i]) / vmax * 54
+            draw.rectangle((cx - cw * 0.28, y + h - vh, cx + cw * 0.28, y + h), fill=(*color[:3],))
 
     close = pd.to_numeric(df["Close"], errors="coerce")
     for span, color in ((20, BLUE), (50, AMBER)):
@@ -138,19 +190,65 @@ def _draw_candle_chart(draw, df, box, entry=None, stop=None, target=None, title=
         if len(pts) > 1:
             draw.line(pts, fill=color, width=3)
 
-    for price, color, label in ((entry, CYAN, "Giriş"), (stop, RED, "Stop"), (target, GREEN, "H1")):
+    structural_levels = (
+        (sr4.get("support"), GREEN, "4H DESTEK", True),
+        (sr4.get("resistance"), RED, "4H DİRENÇ", True),
+        (entry, CYAN, "GİRİŞ", False),
+        (stop, RED, "STOP", False),
+        (target, GREEN, "H1", False),
+    )
+    for price, color, label, dashed in structural_levels:
         p = _num(price)
         if p is None:
             continue
         yy = _scale_price(p, lo, hi, y, h)
-        draw.line((x, yy, x + w, yy), fill=color, width=2)
-        _text(draw, (x + w + 5, yy), f"{label} {p:.2f}", 14, color, True, "lm")
+        _line_with_label(draw, x, w, yy, color, f"{label} {p:.2f}", dashed, 2)
+
+    pattern = geometry.get("pattern") or {}
+    if pattern:
+        name = str(pattern.get("name") or "FORMASYON").replace("_", " ")
+        _rounded(draw, (x + 12, y + 12, x + 285, y + 50), 10, fill=(32, 67, 82), outline=CYAN)
+        _text(draw, (x + 26, y + 23), f"✓ {name}", 15, CYAN, True)
+
+    # Price axis labels and TradingView-like time markers.
+    for i in range(7):
+        value = hi - (hi - lo) * i / 6
+        yy = y + h * i / 6
+        _text(draw, (x + w + 10, yy), f"{value:.2f}", 12, MUTED, False, "lm")
+    if isinstance(df.index, pd.DatetimeIndex):
+        for i in (0, len(df) // 2, len(df) - 1):
+            ts = df.index[i]
+            label = ts.strftime("%d.%m\n%H:%M")
+            _text(draw, (x + i * cw + cw * 0.5, y + h + 10), label, 11, MUTED, False, "ma")
 
 
-def _metric(draw, x, y, w, title, value, color=TEXT):
-    _rounded(draw, (x, y, x + w, y + 78), 14, fill=PANEL2, outline=GRID)
-    _text(draw, (x + 14, y + 11), title, 15, MUTED, True)
-    _text(draw, (x + 14, y + 37), value, 23, color, True)
+def _metric(draw, x, y, w, title, value, color=TEXT, subtitle=None):
+    _rounded(draw, (x, y, x + w, y + 94), 14, fill=PANEL2, outline=GRID)
+    _text(draw, (x + 14, y + 12), title, 14, MUTED, True)
+    _text(draw, (x + 14, y + 39), value, 25, color, True)
+    if subtitle:
+        _text(draw, (x + 14, y + 72), subtitle, 11, MUTED)
+
+
+def _wrapped(draw, xy, text, max_width, size=16, fill=TEXT, bold=False, max_lines=3, line_gap=5):
+    words = str(text).split()
+    lines, current = [], ""
+    font = _font(size, bold)
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if draw.textbbox((0, 0), candidate, font=font)[2] <= max_width:
+            current = candidate
+        else:
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    x, y = xy
+    for line in lines[:max_lines]:
+        draw.text((x, y), line, font=font, fill=fill)
+        y += size + line_gap
+    return y
 
 
 def _stage_color(stage):
@@ -173,11 +271,14 @@ def build_signal_card(signal, item, state=None):
     img = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(img)
 
-    _rounded(draw, (24, 20, W - 24, 112), 22, fill=(18, 37, 60), outline=GRID)
-    _text(draw, (48, 37), symbol, 38, WHITE, True)
-    _text(draw, (230, 43), "POZİSYON" if scope == "POSITION" else "GÜN İÇİ", 24, MUTED, True)
-    _text(draw, (W - 48, 37), f"{stage} · {score:.0f}/100", 25, _stage_color(stage), True, "ra")
-    _text(draw, (48, 82), algo.title(), 17, MUTED)
+    _rounded(draw, (24, 20, W - 24, 124), 22, fill=(18, 37, 60), outline=GRID)
+    _text(draw, (48, 36), symbol, 42, WHITE, True)
+    _text(draw, (250, 45), "POZİSYON" if scope == "POSITION" else "GÜN İÇİ", 23, MUTED, True)
+    phase = str(signal.get("market_structure_phase") or "-")
+    phase_tr = {"STARTING": "HAREKET BAŞLANGICI", "EARLY_TREND": "ERKEN TREND"}.get(phase, phase)
+    _text(draw, (48, 89), f"{algo.title()}  ·  {phase_tr}", 17, CYAN, True)
+    _text(draw, (W - 48, 39), f"{stage} · {score:.0f}/100", 27, _stage_color(stage), True, "ra")
+    _text(draw, (W - 48, 85), "PROFESYONEL YAPI MOTORU", 14, MUTED, True, "ra")
 
     entry = _num(signal.get("entry_price"))
     current = _num(signal.get("current_price"), entry)
@@ -186,29 +287,6 @@ def build_signal_card(signal, item, state=None):
     tp2 = _num(signal.get("tp2"))
     tp3 = _num(signal.get("tp3"))
 
-    tf = "4h" if scope == "POSITION" else "15m"
-    chart_df = _frame(item, tf)
-    _draw_candle_chart(
-        draw,
-        chart_df,
-        (24, 132, W - 24, 650),
-        entry=entry,
-        stop=stop,
-        target=tp1,
-        title=f"GERÇEK MUM · {('4 SAAT' if tf == '4h' else '15 DAKİKA')} · EMA20 / EMA50",
-    )
-
-    gap = 12
-    mw = (W - 48 - gap * 3) / 4
-    vals = [
-        ("GİRİŞ", f"{entry:.2f}" if entry is not None else "-", CYAN),
-        ("CANLI", f"{current:.2f}" if current is not None else "-", GREEN if current and entry and current >= entry else RED),
-        ("STOP", f"{stop:.2f}" if stop is not None else "-", RED),
-        ("1. HEDEF", f"{tp1:.2f}" if tp1 is not None else "-", GREEN),
-    ]
-    for i, (title, value, color) in enumerate(vals):
-        _metric(draw, 24 + i * (mw + gap), 670, mw, title, value, color)
-
     rs = _num(signal.get("relative_strength_percentile"))
     rvol = _num(signal.get("session_rvol"))
     r15 = _num(signal.get("rsi_15m"))
@@ -216,39 +294,83 @@ def build_signal_card(signal, item, state=None):
     r1 = _num(signal.get("rsi_1d"))
     day = _num(signal.get("day_change_pct"))
 
-    _rounded(draw, (24, 765, W - 24, 930), 18, fill=PANEL, outline=GRID)
-    _text(draw, (44, 782), "TEKNİK ÖZET", 18, MUTED, True)
-
-    tech = [
-        ("RSI 15dk", "-" if r15 is None else f"{r15:.1f}"),
-        ("RSI 4s", "-" if r4 is None else f"{r4:.1f}"),
-        ("RSI 1g", "-" if r1 is None else f"{r1:.1f}"),
-        ("Göreceli güç", "-" if rs is None else f"%{rs:.0f}"),
-        ("Göreli hacim", "-" if rvol is None else f"{rvol:.2f}x"),
-        ("Günlük hareket", "-" if day is None else f"%{day:.2f}"),
+    # The first row answers the trader's immediate decision questions.
+    gap = 12
+    mw = (W - 48 - gap * 5) / 6
+    kpis = [
+        ("SİNYAL GÜCÜ", f"{score:.0f}/100", _stage_color(stage), phase_tr),
+        ("GİRİŞ", f"{entry:.2f}" if entry is not None else "-", CYAN, "planlanan"),
+        ("STOP", f"{stop:.2f}" if stop is not None else "-", RED, f"risk %{signal.get('risk_pct','-')}"),
+        ("HEDEF 1", f"{tp1:.2f}" if tp1 is not None else "-", GREEN, "ilk realize"),
+        ("RS GÜCÜ", "-" if rs is None else f"%{rs:.0f}", BLUE, "BIST evreni"),
+        ("4H RSI", "-" if r4 is None else f"{r4:.1f}", AMBER, "trend momentumu"),
     ]
-    tw = (W - 88) / 3
-    for i, (label, value) in enumerate(tech):
-        row = i // 3
-        col = i % 3
-        xx = 44 + col * tw
-        yy = 818 + row * 48
-        _text(draw, (xx, yy), label, 14, MUTED)
-        _text(draw, (xx + 145, yy), value, 18, TEXT, True)
+    for i, values in enumerate(kpis):
+        _metric(draw, 24 + i * (mw + gap), 144, mw, *values)
 
-    _rounded(draw, (24, 950, W - 24, H - 24), 18, fill=(15, 30, 49), outline=GRID)
-    _text(draw, (44, 967), "SİNYAL AKIŞI", 17, MUTED, True)
-    history = list((state or {}).get("history") or [])
-    if not history:
-        reasons = signal.get("reasons") or []
-        history = [{"time": signal.get("time") or "", "text": x} for x in reasons[:3]]
-    yy = 997
-    for event in history[-3:]:
-        _text(draw, (46, yy), f"{event.get('time','')}  {event.get('text','')}", 14, TEXT)
-        yy += 30
+    tf = "4h" if scope == "POSITION" else "15m"
+    chart_df = _frame(item, tf)
+    _draw_candle_chart(
+        draw,
+        chart_df,
+        (24, 258, W - 24, 1120),
+        signal,
+        title=f"{('4 SAATLİK' if tf == '4h' else '15 DAKİKALIK')} TRADE GRAFİĞİ",
+    )
+
+    # Bottom-left: trade plan and compact technical KPIs.
+    left = (24, 1140, 552, 1632)
+    _rounded(draw, left, 18, fill=PANEL, outline=GRID)
+    _text(draw, (46, 1160), "TRADE PLANI", 20, WHITE, True)
+    _text(draw, (46, 1200), "Giriş", 14, MUTED, True)
+    _text(draw, (182, 1195), f"{entry:.2f}" if entry else "-", 24, CYAN, True)
+    _text(draw, (46, 1242), "Stop", 14, MUTED, True)
+    _text(draw, (182, 1237), f"{stop:.2f}" if stop else "-", 24, RED, True)
+    _text(draw, (46, 1284), "Hedefler", 14, MUTED, True)
+    _text(draw, (182, 1279), " / ".join(f"{x:.2f}" for x in (tp1, tp2, tp3) if x is not None) or "-", 21, GREEN, True)
+    _text(draw, (46, 1334), "TEKNİK KPI", 17, MUTED, True)
+    tech = [
+        ("RSI 1D", "-" if r1 is None else f"{r1:.1f}"),
+        ("Hacim", "-" if rvol is None else f"{rvol:.2f}x"),
+        ("Günlük", "-" if day is None else f"%{day:.2f}"),
+        ("Canlı", "-" if current is None else f"{current:.2f}"),
+    ]
+    for i, (label, value) in enumerate(tech):
+        xx = 46 + (i % 2) * 248
+        yy = 1370 + (i // 2) * 72
+        _text(draw, (xx, yy), label, 13, MUTED, True)
+        _text(draw, (xx, yy + 24), value, 21, TEXT, True)
+    calibration = signal.get("calibration_status") or "LEARNING"
+    sample = signal.get("calibration_sample_size") or 0
+    _rounded(draw, (44, 1524, 532, 1608), 12, fill=(15, 30, 49), outline=GRID)
+    _text(draw, (62, 1540), "İSTATİSTİKSEL DOĞRULAMA", 13, MUTED, True)
+    _text(draw, (62, 1568), f"{calibration} · n={sample}", 19, AMBER if calibration != "CALIBRATED" else GREEN, True)
+
+    # Bottom-right: only evidence that formed; no generic indicator dump.
+    right = (572, 1140, W - 24, 1632)
+    _rounded(draw, right, 18, fill=PANEL, outline=GRID)
+    _text(draw, (596, 1160), "NEDEN SİNYAL?", 20, WHITE, True)
+    confirmations = list(signal.get("technical_confirmations") or [])
+    if not confirmations:
+        confirmations = list(signal.get("reasons") or [])
+    yy = 1202
+    for evidence in confirmations[:5]:
+        _text(draw, (598, yy), "✓", 18, GREEN, True)
+        yy = _wrapped(draw, (628, yy), evidence, 744, 16, TEXT, False, 2, 4) + 12
+
+    warnings = list(signal.get("technical_warnings") or [])
+    if warnings:
+        _rounded(draw, (594, 1485, W - 46, 1598), 12, fill=(54, 38, 31), outline=AMBER)
+        _text(draw, (614, 1501), "İZLENEN RİSK", 14, AMBER, True)
+        _wrapped(draw, (614, 1530), warnings[0], 730, 15, TEXT, False, 2, 4)
+    else:
+        _rounded(draw, (594, 1510, W - 46, 1598), 12, fill=(24, 52, 48), outline=GREEN)
+        _text(draw, (614, 1527), "YAPISAL VETO YOK", 15, GREEN, True)
+        _text(draw, (614, 1555), "Stop seviyesi yapının bozulduğu alanı temsil eder.", 14, MUTED)
 
     now = datetime.now(TR_TZ).strftime("%d.%m.%Y %H:%M:%S")
-    _text(draw, (W - 34, H - 32), now, 13, MUTED, False, "rb")
+    _text(draw, (30, H - 22), "Ücretsiz OHLCV · Order-block/FVG mum türevidir, L2 emir defteri değildir.", 12, MUTED, False, "lb")
+    _text(draw, (W - 30, H - 22), now, 12, MUTED, False, "rb")
 
     out_dir = Path("cards")
     out_dir.mkdir(exist_ok=True)

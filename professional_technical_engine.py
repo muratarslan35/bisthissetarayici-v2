@@ -439,6 +439,40 @@ def structure_events(df):
     }
 
 
+def chart_geometry(df, lookback=60):
+    """Deterministic coordinates for the 4H signal-card overlays."""
+    work = _frame(df, 35)
+    if work is None:
+        return {}
+    work = work.tail(lookback).copy()
+    n = len(work)
+    close = work["Close"].astype(float)
+    x = np.arange(n, dtype=float)
+    log_close = np.log(close.to_numpy())
+    slope, intercept = np.polyfit(x, log_close, 1)
+    center = slope * x + intercept
+    sigma = float(np.std(log_close - center))
+    channel = {
+        "lower": [float(math.exp(center[0] - 2 * sigma)), float(math.exp(center[-1] - 2 * sigma))],
+        "middle": [float(math.exp(center[0])), float(math.exp(center[-1]))],
+        "upper": [float(math.exp(center[0] + 2 * sigma)), float(math.exp(center[-1] + 2 * sigma))],
+    }
+    highs, lows = _pivots(work, radius=2, lookback=n)
+    high_line, low_line = _line(highs[-4:]), _line(lows[-4:])
+    trend_lines = {}
+    if high_line and high_line["r2"] >= 0.35:
+        trend_lines["upper"] = [_at(high_line, 0), _at(high_line, n - 1)]
+    if low_line and low_line["r2"] >= 0.35:
+        trend_lines["lower"] = [_at(low_line, 0), _at(low_line, n - 1)]
+    patterns = geometric_patterns(work)
+    confirmed = next((p for p in patterns if p.get("confirmed")), None)
+    return {
+        "channel": channel,
+        "trend_lines": trend_lines,
+        "pattern": confirmed,
+    }
+
+
 @dataclass
 class TechnicalAssessment:
     version: str

@@ -6,6 +6,7 @@ import pandas as pd
 from professional_technical_engine import (
     ENGINE_VERSION,
     analyze_position_structure,
+    chart_geometry,
     demark_sequential,
     most,
     smart_money_zones,
@@ -73,6 +74,12 @@ class ProfessionalTechnicalEngineTests(unittest.TestCase):
         for key in ("support_resistance", "channels", "most", "demark", "patterns", "volume_price", "candle_zones", "market_structure"):
             self.assertIn(key, structures)
         self.assertIn("No L2/order-book", structures["data_limit"])
+
+    def test_chart_geometry_exposes_channel_and_pivot_lines(self):
+        x = np.arange(90)
+        result = chart_geometry(frame(90 + x * 0.15 + np.sin(x / 3) * 1.5))
+        self.assertEqual(set(result["channel"]), {"lower", "middle", "upper"})
+        self.assertTrue(result["trend_lines"])
 
 
 if __name__ == "__main__":
