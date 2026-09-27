@@ -1068,9 +1068,9 @@ def admin_test_signal_caption(signal):
 def build_latest_real_admin_card():
     """Build a delivery-test card exclusively from the latest real signal/data."""
     latest = get_latest_position_signal_payload()
-    if not latest or not latest.get("symbol"):
-        return None, "Gönderilecek gerçek pozisyon sinyali bulunamadı", 404
-    items = fetch_market_snapshot([latest.get("symbol")])
+    visual_test_only = not latest or not latest.get("symbol")
+    symbol = (latest or {}).get("symbol") or os.getenv("ADMIN_TEST_SYMBOL", "THYAO.IS")
+    items = fetch_market_snapshot([symbol])
     if not items:
         return None, "Gerçek 4H piyasa verisi alınamadı; simüle kart gönderilmedi", 503
     item = items[0]
@@ -1082,15 +1082,51 @@ def build_latest_real_admin_card():
         (tf.get("1h") or {}).get("df"),
         item.get("current_price"),
     )
+    if visual_test_only:
+        d4 = (tf.get("4h") or {}).get("df")
+        if d4 is None or len(d4) < 20:
+            return None, "Gerçek 4H test verisi yetersiz; simüle kart gönderilmedi", 503
+        price = float(item.get("current_price"))
+        structures = assessment.get("structures") or {}
+        sr4 = (structures.get("support_resistance") or {}).get("4H") or {}
+        tr = pd.concat([
+            d4["High"] - d4["Low"],
+            (d4["High"] - d4["Close"].shift(1)).abs(),
+            (d4["Low"] - d4["Close"].shift(1)).abs(),
+        ], axis=1).max(axis=1)
+        atr = float(tr.rolling(14).mean().iloc[-1])
+        risk = max(atr * 1.5, price * 0.02)
+        support = sr4.get("support")
+        resistance = sr4.get("resistance")
+        stop = float(support) - atr * 0.25 if support and float(support) < price else price - risk
+        unit_risk = max(price - stop, price * 0.01)
+        first_target = float(resistance) if resistance and float(resistance) > price else price + unit_risk * 1.5
+        latest = {
+            "symbol": symbol,
+            "signal_scope": "POSITION",
+            "main_algorithm": "REAL_DATA_VISUAL_TEST",
+            "score": max(0, min(99, 60 + int(assessment.get("score_adjustment") or 0))),
+            "entry_price": round(price, 2),
+            "current_price": round(price, 2),
+            "stop_loss": round(stop, 2),
+            "tp1": round(first_target, 2),
+            "tp2": round(price + unit_risk * 2.5, 2),
+            "tp3": round(price + unit_risk * 4.0, 2),
+            "risk_pct": round(unit_risk / price * 100, 2),
+            "calibration_status": "GERÇEK VERİ TESTİ",
+            "calibration_sample_size": 0,
+        }
     latest["technical_structures"] = assessment.get("structures") or {}
-    latest["technical_confirmations"] = assessment.get("confirmations") or []
-    latest["technical_warnings"] = assessment.get("warnings") or []
+    confirmations = assessment.get("confirmations") or []
+    latest["technical_confirmations"] = (["Gerçek 4H OHLCV görsel testi"] + confirmations)[:5] if visual_test_only else confirmations
+    warnings = assessment.get("warnings") or []
+    latest["technical_warnings"] = (["Görsel testtir; gerçek trade sinyali değildir"] + warnings)[:5] if visual_test_only else warnings
     latest["market_structure_phase"] = assessment.get("phase")
     latest["rsi_4h"] = (tf.get("4h") or {}).get("rsi")
     image_path = build_signal_card(
         latest,
         item,
-        state={"stage": latest.get("signal_stage") or "GÜÇLÜ", "history": []},
+        state={"stage": "TEST" if visual_test_only else latest.get("signal_stage") or "GÜÇLÜ", "history": []},
     )
     return (image_path, latest), None, 200
 
