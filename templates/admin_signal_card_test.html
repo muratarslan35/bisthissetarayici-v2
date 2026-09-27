@@ -32,7 +32,9 @@
       <div class="actions">
         <button onclick="reloadExact()">Botta Gönderilen Son Görsel</button>
         <button onclick="rerender()">Güncel 4H ile Yeniden Üret</button>
+        <button onclick="sendTelegram()" style="background:#16a36a">Telegram’ıma Test Sinyali Gönder</button>
       </div>
+      <div id="sendStatus" class="note" aria-live="polite"></div>
       <div class="frame"><img id="signalCard" src="/admin/test-signal-card/image?t={{ range(1,999999)|random }}" alt="Gerçek bot sinyal kartı"></div>
       <p class="note">
         “Botta Gönderilen Son Görsel” Telegram'a gönderilen POSITION PNG dosyasının birebir kopyasıdır.
@@ -45,6 +47,17 @@
     const img=document.getElementById('signalCard');
     function reloadExact(){img.src='/admin/test-signal-card/image?t='+Date.now()}
     function rerender(){img.src='/admin/test-signal-card/image?refresh=1&t='+Date.now()}
+    async function sendTelegram(){
+      const status=document.getElementById('sendStatus');
+      status.textContent='Test sinyali hazırlanıyor ve yalnız admin Telegram hesabınıza gönderiliyor…';
+      try{
+        const response=await fetch('/admin/test-signal-card/send',{method:'POST'});
+        const data=await response.json();
+        if(!response.ok) throw new Error(data.error||'Gönderim başarısız');
+        status.textContent='✓ Test sinyali Telegram hesabınıza gönderildi.';
+        reloadExact();
+      }catch(error){status.textContent='⚠ '+error.message}
+    }
   </script>
 </body>
 </html>

@@ -16,10 +16,13 @@ class DashboardSecurityTests(unittest.TestCase):
         with app.test_client() as client:
             page = client.get("/admin/test-signal-card")
             image = client.get("/admin/test-signal-card/image")
+            send = client.post("/admin/test-signal-card/send")
         self.assertEqual(page.status_code, 302)
         self.assertEqual(image.status_code, 302)
+        self.assertEqual(send.status_code, 302)
         self.assertIn("/login?next=%2Fadmin%2Ftest-signal-card", page.headers["Location"])
         self.assertIn("/login?next=%2Fadmin%2Ftest-signal-card%2Fimage", image.headers["Location"])
+        self.assertIn("/login?next=%2Fadmin%2Ftest-signal-card%2Fsend", send.headers["Location"])
 
     def test_login_page_preserves_safe_admin_return_path(self):
         app.config["TESTING"] = True

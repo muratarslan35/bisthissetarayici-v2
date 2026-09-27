@@ -83,6 +83,7 @@ from signal_state import (
     get_signal_state,
 )
 from signal_card_v3 import build_signal_card
+from signal_card_test_fixture import build_test_signal_card
 from signal_engine import (
     process_symbol_signals,
     update_success_targets,
@@ -982,11 +983,19 @@ def admin_test_signal_card_image():
 
     signal = get_latest_position_signal_payload(request.args.get("symbol"))
     if not signal:
-        return jsonify({"error": "Henüz kaydedilmiş POSITION sinyali yok"}), 404
+        image_path, _ = build_test_signal_card()
+        archive_admin_signal_preview(image_path)
+        response = send_file(ADMIN_SIGNAL_PREVIEW, mimetype="image/png", max_age=0)
+        response.headers["X-Signal-Preview-Source"] = "ADMIN_TEST_FIXTURE"
+        return response
 
     items = fetch_market_snapshot([signal.get("symbol")])
     if not items:
-        return jsonify({"error": "Güncel 4H piyasa verisi alınamadı"}), 503
+        image_path, _ = build_test_signal_card(signal)
+        archive_admin_signal_preview(image_path)
+        response = send_file(ADMIN_SIGNAL_PREVIEW, mimetype="image/png", max_age=0)
+        response.headers["X-Signal-Preview-Source"] = "ADMIN_TEST_FIXTURE_RATE_LIMIT_FALLBACK"
+        return response
     item = items[0]
     signal["current_price"] = item.get("current_price")
     image_path = build_signal_card(
@@ -998,6 +1007,41 @@ def admin_test_signal_card_image():
     response = send_file(ADMIN_SIGNAL_PREVIEW, mimetype="image/png", max_age=0)
     response.headers["X-Signal-Preview-Source"] = "REAL_SIGNAL_LATEST_4H_RERENDER"
     return response
+
+
+@app.route("/admin/test-signal-card/send", methods=["POST"])
+@admin_required
+def admin_send_test_signal_card():
+    now = int(time.time())
+    last_sent = int(session.get("last_test_signal_sent_at") or 0)
+    if now - last_sent < 30:
+        return jsonify({"error": "Yeni test için 30 saniye bekleyin"}), 429
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT telegram_chat_id FROM users WHERE username=? AND is_admin=1",
+        (session.get("user"),),
+    )
+    row = cur.fetchone()
+    conn.close()
+    chat_id = row["telegram_chat_id"] if row else None
+    if not chat_id:
+        return jsonify({"error": "Admin hesabında kayıtlı Telegram chat_id yok"}), 400
+
+    latest = get_latest_position_signal_payload()
+    image_path, signal = build_test_signal_card(latest)
+    archive_admin_signal_preview(image_path)
+    caption = (
+        "🧪 <b>TEST SİNYALİ — İŞLEM AÇMAYIN</b>\n"
+        f"📊 {str(signal.get('symbol') or 'TEST').replace('.IS', '')}\n"
+        "Bu gönderim yalnız bot fotoğrafı, okunabilirlik ve teslimat kontrolüdür. "
+        "Trade defterine kaydedilmemiştir."
+    )
+    if not send_photo(chat_id, str(ADMIN_SIGNAL_PREVIEW), caption):
+        return jsonify({"error": "Telegram fotoğraf gönderimi başarısız"}), 502
+    session["last_test_signal_sent_at"] = now
+    return jsonify({"status": "sent", "recipient": "current_admin_telegram"})
 
 @app.route("/admin/users")
 @admin_required
