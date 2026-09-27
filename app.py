@@ -1069,6 +1069,7 @@ def build_latest_real_admin_card():
     """Build a delivery-test card exclusively from the latest real signal/data."""
     latest = get_latest_position_signal_payload()
     visual_test_only = not latest or not latest.get("symbol")
+    latest = dict(latest or {})
     symbol = (latest or {}).get("symbol") or os.getenv("ADMIN_TEST_SYMBOL", "THYAO.IS")
     items = fetch_market_snapshot([symbol])
     if not items:
