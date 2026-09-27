@@ -269,6 +269,10 @@ def _signal_rows(cur, scope, limit=80):
         d["holding_horizon"] = metadata.get("holding_horizon")
         d["valid_until"] = metadata.get("valid_until")
         d["event_title"] = metadata.get("event_title")
+        d["technical_engine_version"] = metadata.get("technical_engine_version")
+        d["market_structure_phase"] = metadata.get("market_structure_phase")
+        d["technical_confirmations"] = metadata.get("technical_confirmations", [])
+        d["technical_warnings"] = metadata.get("technical_warnings", [])
 
         current = d.get("current_price")
         # UI live move remains the transparent quote-to-quote change.  The
