@@ -418,3 +418,48 @@ def get_dashboard_data():
         }
 
     return payload
+
+
+def get_latest_position_signal_payload(symbol=None):
+    """Return the original persisted POSITION payload for admin card preview."""
+    conn = get_connection()
+    cur = conn.cursor()
+    params = [POLICY_VERSION]
+    symbol_clause = ""
+    if symbol:
+        symbol_clause = " AND symbol = ?"
+        params.append(str(symbol).upper())
+    cur.execute(f"""
+        SELECT symbol, scope, algorithm, score, entry_price, stop_loss,
+               tp1, tp2, tp3, calibrated_probability, calibration_status,
+               calibration_sample_size, metadata_json, created_at
+        FROM strategy_signals
+        WHERE scope = 'POSITION' AND policy_version = ?{symbol_clause}
+        ORDER BY id DESC
+        LIMIT 1
+    """, params)
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    data = dict(row)
+    try:
+        payload = json.loads(data.pop("metadata_json") or "{}")
+    except Exception:
+        payload = {}
+    payload.update({
+        "symbol": data.get("symbol"),
+        "signal_scope": data.get("scope"),
+        "main_algorithm": data.get("algorithm"),
+        "score": data.get("score"),
+        "entry_price": data.get("entry_price"),
+        "stop_loss": data.get("stop_loss"),
+        "tp1": data.get("tp1"),
+        "tp2": data.get("tp2"),
+        "tp3": data.get("tp3"),
+        "calibrated_probability": data.get("calibrated_probability"),
+        "calibration_status": data.get("calibration_status"),
+        "calibration_sample_size": data.get("calibration_sample_size"),
+        "created_at": data.get("created_at"),
+    })
+    return payload

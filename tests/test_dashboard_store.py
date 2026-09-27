@@ -71,6 +71,12 @@ class DashboardStoreTests(unittest.TestCase):
         self.assertEqual(row["quality"], "A+")
         self.assertAlmostEqual(row["live_gain_pct"], 4.0)
 
+        latest = dashboard_store.get_latest_position_signal_payload()
+        self.assertEqual(latest["symbol"], "TEST.IS")
+        self.assertEqual(latest["signal_scope"], "POSITION")
+        self.assertEqual(latest["main_algorithm"], "SUPER_KOMBINE_V3")
+        self.assertEqual(latest["entry_price"], 100.0)
+
         self.assertEqual(
             data["performance"]["open_summary"]["POSITION"]["open_trades"],
             1,

@@ -9,6 +9,8 @@ from uuid import uuid4
 from functools import wraps
 import random
 import string
+import shutil
+from pathlib import Path
 import pandas as pd
 
 from ultra_price_engine import start_engine
@@ -21,7 +23,7 @@ from volume_engine import update_tick
 from dotenv import load_dotenv
 from flask import (
     Flask, jsonify, render_template,
-    request, session, redirect
+    request, session, redirect, send_file
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -69,6 +71,7 @@ from dashboard_store import (
     init_dashboard_store,
     update_worker_heartbeat,
     persist_market_snapshot,
+    get_latest_position_signal_payload,
 )
 from resource_guard import host_pressure_state
 from signal_policy import select_publishable_candidates, policy_limits
@@ -109,6 +112,20 @@ from brut_tracker import (
 )
 from momentum_card import build_momentum_card
 from candle_engine import get_15m_df, get_1h_df
+
+ADMIN_SIGNAL_PREVIEW = Path("cards/admin/latest_position_signal.png")
+
+
+def archive_admin_signal_preview(image_path):
+    """Atomically preserve the exact PNG sent by the POSITION bot."""
+    source = Path(image_path)
+    if not source.exists():
+        return None
+    ADMIN_SIGNAL_PREVIEW.parent.mkdir(parents=True, exist_ok=True)
+    temporary = ADMIN_SIGNAL_PREVIEW.with_suffix(f".{uuid4().hex}.tmp")
+    shutil.copyfile(source, temporary)
+    os.replace(temporary, ADMIN_SIGNAL_PREVIEW)
+    return str(ADMIN_SIGNAL_PREVIEW)
 
 # ======================================================
 # ENV
@@ -464,6 +481,8 @@ def publish_v5_signal(signal, item):
     image_path = None
     try:
         image_path = build_signal_card(signal, item or {}, state=state)
+        if image_path and signal.get("signal_scope") == "POSITION":
+            archive_admin_signal_preview(image_path)
     except Exception as exc:
         print("V5 CARD ERROR:", exc, flush=True)
 
@@ -932,6 +951,46 @@ def health():
 @app.route("/admin")
 def admin_panel():
     return render_template("admin.html")
+
+
+@app.route("/admin/test-signal-card")
+@admin_required
+def admin_test_signal_card():
+    latest = get_latest_position_signal_payload()
+    return render_template(
+        "admin_signal_card_test.html",
+        latest=latest,
+        exact_preview_available=ADMIN_SIGNAL_PREVIEW.exists(),
+    )
+
+
+@app.route("/admin/test-signal-card/image")
+@admin_required
+def admin_test_signal_card_image():
+    refresh = request.args.get("refresh") == "1"
+    if ADMIN_SIGNAL_PREVIEW.exists() and not refresh:
+        response = send_file(ADMIN_SIGNAL_PREVIEW, mimetype="image/png", max_age=0)
+        response.headers["X-Signal-Preview-Source"] = "EXACT_BOT_PNG"
+        return response
+
+    signal = get_latest_position_signal_payload(request.args.get("symbol"))
+    if not signal:
+        return jsonify({"error": "Henüz kaydedilmiş POSITION sinyali yok"}), 404
+
+    items = fetch_market_snapshot([signal.get("symbol")])
+    if not items:
+        return jsonify({"error": "Güncel 4H piyasa verisi alınamadı"}), 503
+    item = items[0]
+    signal["current_price"] = item.get("current_price")
+    image_path = build_signal_card(
+        signal,
+        item,
+        state={"stage": signal.get("signal_stage") or "GÜÇLÜ", "history": []},
+    )
+    archive_admin_signal_preview(image_path)
+    response = send_file(ADMIN_SIGNAL_PREVIEW, mimetype="image/png", max_age=0)
+    response.headers["X-Signal-Preview-Source"] = "REAL_SIGNAL_LATEST_4H_RERENDER"
+    return response
 
 @app.route("/admin/users")
 @admin_required
