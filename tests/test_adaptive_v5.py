@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 import pandas as pd
+from PIL import Image
 
 from signal_policy import (
     POLICY_VERSION,
@@ -82,6 +83,8 @@ class SignalCardTests(unittest.TestCase):
         try:
             self.assertTrue(Path(path).exists())
             self.assertGreater(Path(path).stat().st_size, 20_000)
+            with Image.open(path) as card:
+                self.assertEqual(card.size, (1440, 1680))
         finally:
             try:
                 os.remove(path)

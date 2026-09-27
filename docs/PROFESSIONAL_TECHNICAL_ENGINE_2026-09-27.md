@@ -75,6 +75,24 @@ Bot messages show:
 All deeper measurements stay in signal metadata and the ledger for validation.
 They are not dumped into Telegram, preventing noisy, unreadable messages.
 
+### Single-image trade terminal
+
+POSITION delivery uses a 1440×1680 professional card:
+
+- top: signal strength, entry, stop, first target, relative strength and 4H RSI;
+- center: a large 4H candlestick/volume chart with EMA20/50, regression-channel
+  upper/middle/lower bands, validated pivot trend lines, 4H support/resistance,
+  entry, stop and first target;
+- confirmed triangle/wedge/flag/pennant badge only when the geometry and volume
+  confirmation truly exist;
+- bottom: full trade plan, compact KPIs, calibration state, up to five formed
+  confirmations and one monitored risk;
+- footer: explicit OHLCV/L2 data limitation and generation timestamp.
+
+The chart is rendered from the same closed-candle frames and technical metadata
+used by the decision engine, so the image cannot invent a confirmation absent
+from the signal payload.
+
 ## Non-repainting and validation rules
 
 - Structure is calculated from closed candles supplied by V3.
