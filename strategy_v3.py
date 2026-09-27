@@ -632,6 +632,8 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
     c4 = d4["Close"].astype(float) if d4 is not None and len(d4) >= 25 else None
     c1 = d1h["Close"].astype(float) if d1h is not None and len(d1h) >= 22 else None
     trend_start = False
+    trend_start_score = 0.0
+    trend_start_reasons = []
     if c4 is not None and c1 is not None:
         e20_4 = c4.ewm(span=20, adjust=False).mean()
         e50_4 = c4.ewm(span=50, adjust=False).mean()
@@ -639,34 +641,51 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
         e50_1 = c1.ewm(span=50, adjust=False).mean()
 
         daily_early = close.iloc[-1] > ema20.iloc[-1] and _slope(ema20, 6) > 0
-        four_hour_early = (
-            c4.iloc[-1] > e20_4.iloc[-1]
-            and _slope(e20_4, 4) > 0
-            and e20_4.iloc[-1] >= e50_4.iloc[-1] * 0.985
-        )
         one_hour_confirm = (
             c1.iloc[-1] > e20_1.iloc[-1]
-            and e20_1.iloc[-1] >= e50_1.iloc[-1] * 0.99
             and c1.iloc[-1] > c1.iloc[-2]
         )
         healthy_rsi = (
-            (rsi_1d is None or 48 <= rsi_1d <= 72)
-            and (rsi_4h_guard is None or 50 <= rsi_4h_guard <= 70)
-        )
-        trend_start = (
-            daily_early
-            and four_hour_early
-            and one_hour_confirm
-            and healthy_rsi
-            and rs_pct >= 0.70
+            (rsi_1d is None or 45 <= rsi_1d <= 72)
+            and (rsi_4h_guard is None or 45 <= rsi_4h_guard <= 70)
         )
 
+        # 4H is deliberately a scored confirmation, not a binary veto.
+        # This lets the bot catch the beginning of a swing before EMA20/EMA50
+        # has fully crossed, while still rewarding genuine 4H improvement.
+        four_hour_points = 0
+        if c4.iloc[-1] > e20_4.iloc[-1]:
+            four_hour_points += 4
+            trend_start_reasons.append("4 saatlik fiyat EMA20 üzerinde")
+        if _slope(e20_4, 4) > 0:
+            four_hour_points += 4
+            trend_start_reasons.append("4 saatlik EMA20 eğimi yukarı")
+        if c4.iloc[-1] > c4.iloc[-3]:
+            four_hour_points += 3
+            trend_start_reasons.append("4 saatlik fiyat yapısı güçleniyor")
+        if e20_4.iloc[-1] >= e50_4.iloc[-1] * 0.95:
+            four_hour_points += 2
+        if rsi_4h_guard is not None and rsi_4h_guard >= 50:
+            four_hour_points += 3
+            trend_start_reasons.append(f"4 saatlik RSI {rsi_4h_guard:.1f}")
+
+        trend_start = (
+            daily_early
+            and one_hour_confirm
+            and healthy_rsi
+            and rs_pct >= POSITION_RS_MIN
+            and four_hour_points >= 5
+        )
+
+        if trend_start:
+            trend_start_score = 64 + rs_pct * 18 + four_hour_points
+
     if trend_start:
-        score = 68 + rs_pct * 18
+        score = trend_start_score
         reasons = [
             "Günlük EMA20 yukarı eğimli ve fiyat üzerinde",
-            "4 saatlik yapı yukarı dönüyor",
-            "1 saatlik teyit geldi",
+            "1 saatlik fiyat teyidi geldi",
+            *trend_start_reasons[:3],
             f"20 günlük göreceli güç yüzdelik: %{round(rs_pct * 100)}",
         ]
         if volume_ratio >= 1.05:
@@ -685,6 +704,7 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
             )
             if sig:
                 sig["holding_horizon"] = "2-10 işlem günü"
+                sig["four_hour_confirmation_score"] = four_hour_points
                 candidates.append(sig)
 
     # Position engine may use a verified KAP released after the previous
