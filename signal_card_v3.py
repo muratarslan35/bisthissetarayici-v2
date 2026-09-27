@@ -22,6 +22,7 @@ RED = (245, 86, 86)
 AMBER = (245, 181, 64)
 BLUE = (94, 158, 255)
 CYAN = (50, 212, 236)
+TEAL = (54, 211, 176)
 WHITE = (255, 255, 255)
 
 
@@ -77,14 +78,17 @@ def _ema(series, span):
     return pd.to_numeric(series, errors="coerce").astype(float).ewm(span=span, adjust=False).mean()
 
 
-def _line_with_label(draw, x, w, yy, color, label, dash=False, width=2):
+def _line_with_label(draw, x, w, yy, color, label, dash=False, width=2, label_y=None):
     if dash:
         for xx in range(int(x), int(x + w), 18):
             draw.line((xx, yy, min(xx + 10, x + w), yy), fill=color, width=width)
     else:
         draw.line((x, yy, x + w, yy), fill=color, width=width)
-    _rounded(draw, (x + w - 116, yy - 13, x + w + 2, yy + 13), 6, fill=(11, 23, 38))
-    _text(draw, (x + w - 8, yy), label, 13, color, True, "rm")
+    label_y = yy if label_y is None else label_y
+    if abs(label_y - yy) > 2:
+        draw.line((x + w - 122, yy, x + w - 122, label_y), fill=color, width=1)
+    _rounded(draw, (x + w - 142, label_y - 13, x + w + 2, label_y + 13), 6, fill=(11, 23, 38))
+    _text(draw, (x + w - 8, label_y), label, 13, color, True, "rm")
 
 
 def _draw_series_line(draw, values, color, x, w, lo, hi, y, h, width=2):
@@ -131,10 +135,12 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
 
     channel = geometry.get("channel") or {}
     trend_lines = geometry.get("trend_lines") or {}
-    extra = []
-    for values in list(channel.values()) + list(trend_lines.values()):
-        extra.extend([_num(v) for v in values if _num(v) is not None])
-    levels = [v for v in (entry, stop, target, sr4.get("support"), sr4.get("resistance")) if _num(v) is not None] + extra
+    lower_trend = trend_lines.get("lower") or []
+    trend_start = _num(lower_trend[0]) if len(lower_trend) == 2 else None
+    trend_end = _num(lower_trend[1]) if len(lower_trend) == 2 else None
+    rising_trend = trend_start is not None and trend_end is not None and trend_end > trend_start
+    visible_trend = [_num(v) for v in lower_trend if _num(v) is not None] if rising_trend else []
+    levels = [v for v in (entry, stop, target, sr4.get("support"), sr4.get("resistance")) if _num(v) is not None] + visible_trend
     if levels:
         hi = max(hi, max(levels))
         lo = min(lo, min(levels))
@@ -187,6 +193,12 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
         if len(pts) > 1:
             draw.line(pts, fill=color, width=3)
 
+    if rising_trend:
+        _draw_series_line(draw, lower_trend, TEAL, x, w, lo, hi, y, price_h, 4)
+        trend_y = _scale_price(float(lower_trend[-1]), lo, hi, y, price_h)
+        _rounded(draw, (x + 14, trend_y - 16, x + 190, trend_y + 14), 7, fill=(11, 23, 38), outline=TEAL)
+        _text(draw, (x + 26, trend_y - 1), "YÜKSELEN TREND", 12, TEAL, True, "lm")
+
     most_values = most_series(df, period=9, percent=2.0)
     if most_values is not None:
         vals = [float(v) for v in most_values.tail(n)]
@@ -200,12 +212,23 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
         (stop, RED, "STOP", False),
         (target, GREEN, "H1", False),
     )
+    level_rows = []
     for price, color, label, dashed in structural_levels:
         p = _num(price)
         if p is None:
             continue
-        yy = _scale_price(p, lo, hi, y, price_h)
-        _line_with_label(draw, x, w, yy, color, f"{label} {p:.2f}", dashed, 2)
+        level_rows.append({"p": p, "color": color, "label": label, "dash": dashed, "y": _scale_price(p, lo, hi, y, price_h)})
+    level_rows.sort(key=lambda row: row["y"])
+    previous = y - 26
+    for row in level_rows:
+        row["label_y"] = max(row["y"], previous + 27)
+        previous = row["label_y"]
+    if level_rows and level_rows[-1]["label_y"] > y + price_h - 12:
+        shift = level_rows[-1]["label_y"] - (y + price_h - 12)
+        for row in level_rows:
+            row["label_y"] -= shift
+    for row in level_rows:
+        _line_with_label(draw, x, w, row["y"], row["color"], f"{row['label']} {row['p']:.2f}", row["dash"], 2, row["label_y"])
 
     pattern = geometry.get("pattern") or {}
     if pattern:
@@ -434,6 +457,7 @@ def build_signal_card(signal, item, state=None):
         (GREEN, "Destek / hedef"),
         (RED, "Direnç / stop"),
         (CYAN, "Giriş fiyatı"),
+        (TEAL, "Yükselen trend"),
     ]
     legend_y = H - 82
     _text(draw, (30, legend_y - 25), "ÇİZGİ RENKLERİ", 13, MUTED, True)
@@ -441,7 +465,7 @@ def build_signal_card(signal, item, state=None):
     for color, label in legend:
         draw.line((xx, legend_y, xx + 25, legend_y), fill=color, width=5)
         _text(draw, (xx + 34, legend_y), label, 12, TEXT, True, "lm")
-        xx += 220
+        xx += 190
 
     now = datetime.now(TR_TZ).strftime("%d.%m.%Y %H:%M:%S")
     _text(draw, (30, H - 18), "Ücretsiz OHLCV · Order-block/FVG mum türevidir, L2 emir defteri değildir.", 12, MUTED, False, "lb")
