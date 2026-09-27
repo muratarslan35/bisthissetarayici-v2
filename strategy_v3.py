@@ -6,6 +6,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from professional_technical_engine import analyze_position_structure
+
 TR_TZ = ZoneInfo("Europe/Istanbul")
 
 MIN_DAILY_TURNOVER = float(os.getenv("MIN_AVG_DAILY_TURNOVER_TL", "20000000"))
@@ -506,6 +508,22 @@ def _base_signal(item, scope, algo, score, reasons, ctx, rs_pct, risk):
     }
 
 
+def _decorate_position_signal(signal, assessment):
+    if not signal:
+        return signal
+    confirmations = list(assessment.get("confirmations") or [])
+    warnings = list(assessment.get("warnings") or [])
+    signal["technical_engine_version"] = assessment.get("version")
+    signal["market_structure_phase"] = assessment.get("phase")
+    signal["technical_score_adjustment"] = assessment.get("score_adjustment", 0)
+    signal["technical_confirmations"] = confirmations
+    signal["technical_warnings"] = warnings
+    signal["technical_structures"] = assessment.get("structures") or {}
+    # Message remains readable: only evidence that actually formed is shown.
+    signal["reasons"] = list(signal.get("reasons") or []) + confirmations[:3]
+    return signal
+
+
 def evaluate_position_signals(item, ctx, kap_cache=None):
     symbol = item.get("symbol")
     price = _num(item.get("current_price"))
@@ -546,6 +564,11 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
     if rs_pct < POSITION_RS_MIN:
         return []
 
+    assessment = analyze_position_structure(d1, d4, d1h, price)
+    if not assessment.get("eligible"):
+        return []
+    technical_adjustment = _num(assessment.get("score_adjustment"), 0.0) or 0.0
+
     trend_up = (
         close.iloc[-1] > ema50.iloc[-1] > ema200.iloc[-1]
         and _slope(ema50, 10) > 0
@@ -575,7 +598,7 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
     # KOMBINE V3: controlled pullback in an established position trend.
     pullback_distance = abs(price - _num(ema20.iloc[-1], price)) / price
     if trend_up and four_hour_up and one_hour_turn and pullback_distance <= 0.035:
-        score = 58 + rs_pct * 20
+        score = 58 + rs_pct * 20 + technical_adjustment
         reasons = [
             "1D EMA50 > EMA200 ve EMA50 eğimi yukarı",
             "4H ana trend yukarı",
@@ -599,14 +622,14 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
             )
             if sig:
                 sig["holding_horizon"] = "2-10 işlem günü"
-                candidates.append(sig)
+                candidates.append(_decorate_position_signal(sig, assessment))
 
     # SUPER KOMBINE V3: daily structural breakout + relative-strength acceleration.
     breakout = _daily_breakout_level(d1, 20)
     if trend_up and four_hour_up and breakout and price >= breakout:
         extension_atr = (price - breakout) / atr_d if atr_d else 99.0
         if extension_atr <= 1.5:
-            score = 66 + rs_pct * 20
+            score = 66 + rs_pct * 20 + technical_adjustment
             reasons = [
                 "20 günlük yapısal direnç kırılımı",
                 "Günlük ve 4 saatlik ana eğilim uyumlu",
@@ -628,7 +651,7 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
                 )
                 if sig:
                     sig["holding_horizon"] = "2-10 işlem günü"
-                    candidates.append(sig)
+                    candidates.append(_decorate_position_signal(sig, assessment))
 
     # TREND START V3: earlier swing entry before a full EMA50/EMA200
     # breakout matures. This is the bot-side lane intended to catch a strong
@@ -690,7 +713,7 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
         )
 
         if trend_start:
-            trend_start_score = 64 + rs_pct * 18 + four_hour_points
+            trend_start_score = 64 + rs_pct * 18 + four_hour_points + technical_adjustment
 
     if trend_start:
         score = trend_start_score
@@ -722,7 +745,7 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
                     if legacy_four_hour_veto_pass
                     else "CHALLENGER_ONLY"
                 )
-                candidates.append(sig)
+                candidates.append(_decorate_position_signal(sig, assessment))
 
     # Position engine may use a verified KAP released after the previous
     # close; keep it eligible into the next session.
@@ -737,7 +760,7 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
         and (kap_score >= 12 or volume_ratio >= 1.50)
     )
     if kap_position_confirmed:
-        score = 72 + rs_pct * 16 + min(8, max(0, kap_score))
+        score = 72 + rs_pct * 16 + min(8, max(0, kap_score)) + technical_adjustment
         reasons = [
             "Taze KAP olayı",
             "Günlük ve 4 saatlik ana eğilim KAP hareketini destekliyor",
@@ -751,7 +774,7 @@ def evaluate_position_signals(item, ctx, kap_cache=None):
             if sig:
                 sig["holding_horizon"] = "2-10 işlem günü"
                 sig["event_title"] = kap.get("title")
-                candidates.append(sig)
+                candidates.append(_decorate_position_signal(sig, assessment))
 
     if not candidates:
         return []
@@ -1245,6 +1268,19 @@ def format_v3_signal_message(signal):
         tech.append(f"RS %{signal.get('relative_strength_percentile')}")
     if tech:
         lines.append("📊 " + " · ".join(tech))
+
+    if scope == "POSITION" and signal.get("market_structure_phase"):
+        phase_label = {
+            "STARTING": "Hareket başlangıcı",
+            "EARLY_TREND": "Erken trend",
+        }.get(signal.get("market_structure_phase"), signal.get("market_structure_phase"))
+        lines.append(f"🏗 Yapı: <b>{phase_label}</b>")
+        confirmations = signal.get("technical_confirmations") or []
+        if confirmations:
+            lines.append("🔎 " + " • ".join(str(x) for x in confirmations[:2]))
+        warnings = signal.get("technical_warnings") or []
+        if warnings:
+            lines.append("⚠️ İzlenen risk: " + str(warnings[0]))
 
     if signal.get("fast_change_60s_pct") is not None:
         lines.append(f"⚡ 60 sn ivme %{signal.get('fast_change_60s_pct')}")

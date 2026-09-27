@@ -178,6 +178,39 @@ class StrategyV3Tests(unittest.TestCase):
         self.assertGreater(risk["tp3"], risk["tp2"])
         self.assertNotEqual(risk["stop_loss"], 95.0)
 
+    def test_professional_assessment_is_attached_without_message_spam(self):
+        signal = {"reasons": ["Ana kurulum"], "score": 86}
+        assessment = {
+            "version": "MARKET_STRUCTURE_V1",
+            "phase": "STARTING",
+            "score_adjustment": 7,
+            "confirmations": ["4H MOST yukarı", "4H BOS", "1D ADX güçlü", "fazla detay"],
+            "warnings": ["Yakın direnç"],
+            "structures": {"data_limit": "OHLCV"},
+        }
+        result = sv3._decorate_position_signal(signal, assessment)
+        self.assertEqual(result["market_structure_phase"], "STARTING")
+        self.assertEqual(len(result["technical_confirmations"]), 4)
+        self.assertEqual(result["reasons"], ["Ana kurulum", "4H MOST yukarı", "4H BOS", "1D ADX güçlü"])
+
+        payload = {
+            **result,
+            "symbol": "TEST.IS",
+            "signal_scope": "POSITION",
+            "main_algorithm": "TREND_START_V3",
+            "entry_price": 100,
+            "stop_loss": 96,
+            "risk_pct": 4,
+            "tp1": 106,
+            "tp2": 112,
+            "tp3": 120,
+        }
+        message = sv3.format_v3_signal_message(payload)
+        self.assertIn("Hareket başlangıcı", message)
+        self.assertIn("4H MOST yukarı", message)
+        self.assertIn("Yakın direnç", message)
+        self.assertNotIn("fazla detay", message)
+
 
 if __name__ == "__main__":
     unittest.main()
