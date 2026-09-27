@@ -101,6 +101,24 @@ jobs:
               if early and four_early and one:
                   gates["trend_start_structure_pass"]+=1
 
+              four_points=0
+              c4=None
+              if d4 is not None and len(d4)>=25:
+                  c4=d4["Close"].astype(float)
+                  e20_4=c4.ewm(span=20,adjust=False).mean()
+                  e50_4=c4.ewm(span=50,adjust=False).mean()
+                  if c4.iloc[-1] > e20_4.iloc[-1]: four_points+=4
+                  if sv3._slope(e20_4,4) > 0: four_points+=4
+                  if c4.iloc[-1] > c4.iloc[-3]: four_points+=3
+                  if e20_4.iloc[-1] >= e50_4.iloc[-1]*0.95: four_points+=2
+                  if rsi4 is not None and rsi4 >= 50: four_points+=3
+              if four_points>=5: gates["4h_points_5"]+=1
+              if early and one: gates["daily_1h_intersection"]+=1
+              if early and one and four_points>=5: gates["daily_1h_4h_intersection"]+=1
+              if early and one and four_points>=5 and rs>=sv3.POSITION_RS_MIN:
+                  gates["position_structure_ready"]+=1
+                  print("READY",symbol,"rs",round(rs,3),"rsi1",rsi1,"rsi4",rsi4,"4hpts",four_points)
+
               out=sv3.evaluate_position_signals(item,ctx,kap_cache={})
               candidates.extend(out)
               if out:
