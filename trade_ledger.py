@@ -349,6 +349,7 @@ def _algo_tr(algo):
         "KOMBINE_V3": "Kombine Trend Dönüşü",
         "SUPER_KOMBINE_V3": "Güçlü Trend Kırılımı",
         "KAP_POSITION_V3": "KAP Destekli Pozisyon",
+        "TREND_START_V3": "Yeni Trend Başlangıcı",
         "MOMENTUM_IGNITION_V3": "Erken Momentum Başlangıcı",
         "INTRADAY_MOMENTUM_V3": "Gün İçi Momentum Devamı",
         "KAP_EVENT_INTRADAY_V3": "KAP Destekli Gün İçi Momentum",
