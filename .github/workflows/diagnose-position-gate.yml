@@ -47,14 +47,67 @@ jobs:
           print("REGIME",ctx.get("regime"),"BREADTH",ctx.get("breadth_intraday"),ctx.get("breadth_daily"))
 
           structural=Counter()
+          gates=Counter()
           candidates=[]
           for item in data:
               structural[str(item.get("structural_data_confidence"))]+=1
+              symbol=item.get("symbol")
+              price=sv3._num(item.get("current_price"))
+              d1=sv3._closed(sv3._frame(item,"1d"),intraday=False)
+              d4=sv3._closed(sv3._frame(item,"4h"),intraday=True)
+              d1h=sv3._closed(sv3._frame(item,"1h"),intraday=True)
+              if sv3._num(item.get("structural_data_confidence"),0)<70:
+                  gates["structural_conf"]+=1; continue
+              if not symbol or not price or d1 is None or len(d1)<220:
+                  gates["history"]+=1; continue
+              if sv3._turnover_20d(d1)<sv3.MIN_DAILY_TURNOVER:
+                  gates["turnover"]+=1; continue
+              close=d1["Close"].astype(float)
+              ema20=close.ewm(span=20,adjust=False).mean()
+              ema50=close.ewm(span=50,adjust=False).mean()
+              ema200=close.ewm(span=200,adjust=False).mean()
+              atr=sv3._atr(d1)
+              if not atr:
+                  gates["atr"]+=1; continue
+              rs=ctx.get("position_rank",{}).get(symbol,0.0)
+              if rs<0.70:
+                  gates["rs_lt_70"]+=1; continue
+              rsi1=sv3._rsi_wilder(close,14)
+              rsi4=sv3._rsi_wilder(d4["Close"],14) if d4 is not None and len(d4)>=20 else None
+              if (rsi1 is not None and rsi1>=78) or (rsi4 is not None and rsi4>=74):
+                  gates["rsi_hot"]+=1; continue
+
+              trend=close.iloc[-1]>ema50.iloc[-1]>ema200.iloc[-1] and sv3._slope(ema50,10)>0
+              early=close.iloc[-1]>ema20.iloc[-1] and sv3._slope(ema20,6)>0
+
+              four=False
+              four_early=False
+              if d4 is not None and len(d4)>=25:
+                  c4=d4["Close"].astype(float); e20=c4.ewm(span=20,adjust=False).mean(); e50=c4.ewm(span=50,adjust=False).mean()
+                  four=e20.iloc[-1]>e50.iloc[-1]
+                  four_early=c4.iloc[-1]>e20.iloc[-1] and sv3._slope(e20,4)>0 and e20.iloc[-1]>=e50.iloc[-1]*0.985
+
+              one=False
+              if d1h is not None and len(d1h)>=22:
+                  c1=d1h["Close"].astype(float); e20=c1.ewm(span=20,adjust=False).mean(); e50=c1.ewm(span=50,adjust=False).mean()
+                  one=c1.iloc[-1]>e20.iloc[-1] and e20.iloc[-1]>=e50.iloc[-1]*0.99 and c1.iloc[-1]>c1.iloc[-2]
+
+              if trend: gates["daily_trend_pass"]+=1
+              if early: gates["daily_early_pass"]+=1
+              if four: gates["4h_trend_pass"]+=1
+              if four_early: gates["4h_early_pass"]+=1
+              if one: gates["1h_confirm_pass"]+=1
+              if early and four_early and one:
+                  gates["trend_start_structure_pass"]+=1
+
               out=sv3.evaluate_position_signals(item,ctx,kap_cache={})
               candidates.extend(out)
+              if out:
+                  gates["position_candidate"]+=1
 
           selected=select_publishable_candidates(candidates,"POSITION")
           print("STRUCTURAL_CONFIDENCE",dict(structural))
+          print("POSITION_GATES",dict(gates))
           print("POSITION_CANDIDATES",len(candidates))
           print("POSITION_PUBLISHABLE",len(selected))
           print("POLICY",policy_limits())
