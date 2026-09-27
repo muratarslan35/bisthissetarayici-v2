@@ -1,0 +1,54 @@
+name: Inspect Live BIST Errors
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/inspect-live-errors.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+
+      - name: Inspect services and logs
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null             ubuntu@89.168.99.141 'bash -se' <<'REMOTE'
+          set -u
+          cd /home/ubuntu/bistbot
+          echo "COMMIT=$(git rev-parse HEAD)"
+          echo "WEB=$(sudo systemctl is-active bist-trading-web.service || true)"
+          echo "WORKER=$(sudo systemctl is-active bist-trading-worker.service || true)"
+          echo "VENV_PY=$(test -x venv/bin/python && echo yes || echo no)"
+          if [ -x venv/bin/python ]; then
+            venv/bin/python - <<'PY'
+          import pandas, PIL
+          print("PYTHON_IMPORTS=PASS")
+          try:
+              import app
+              print("APP_IMPORT=PASS")
+          except Exception as exc:
+              print("APP_IMPORT=FAIL", repr(exc))
+          PY
+          fi
+          echo "=== WEB JOURNAL ==="
+          sudo journalctl -u bist-trading-web.service --since "15 minutes ago" --no-pager | tail -120 || true
+          echo "=== WORKER JOURNAL ==="
+          sudo journalctl -u bist-trading-worker.service --since "15 minutes ago" --no-pager | tail -120 || true
+          echo "=== HEALTH ==="
+          curl -sS -m 5 -i http://127.0.0.1:5000/health || true
+          REMOTE
