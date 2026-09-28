@@ -38,6 +38,10 @@ jobs:
           echo "::add-mask::$TELEGRAM_LOGIN_CODE"
           scp -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             scripts/telegram_session_browser_flow.py ubuntu@89.168.99.141:/tmp/telegram_session_browser_flow.py
+          ssh -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=20 -o ServerAliveCountMax=6 \
+            ubuntu@89.168.99.141 \
+            'sudo /home/ubuntu/bistbot/venv/bin/python -m pip install -q "telethon>=1.36,<2"'
           printf '%s\n' "$TELEGRAM_LOGIN_CODE" | ssh -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=20 -o ServerAliveCountMax=6 \
             ubuntu@89.168.99.141 \
