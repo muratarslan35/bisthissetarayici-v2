@@ -54,5 +54,21 @@ daha büyük değer yazılması sınırı yükseltmez.
 6. Üretilen `TELEGRAM_USER_SESSION` değerini yalnız sunucu secret/env alanına
    kaydedin. GitHub'a commit etmeyin.
 
+### SSH anahtarı yanında değilse: tarayıcı akışı
+
+1. GitHub Actions secret alanına telefonu E.164 biçiminde `TELEGRAM_PHONE`
+   adıyla ekleyin (`+90...`).
+2. `Telegram User Session - Send Code` iş akışını çalıştırın.
+3. Telegram'a gelen tek kullanımlık kodu `TELEGRAM_LOGIN_CODE` secret'ı olarak
+   ekleyin ve `Telegram User Session - Complete Login` iş akışını çalıştırın.
+4. Tamamlama işi session'ı ekrana yazmadan `/etc/bist-trading.env` içine kurar,
+   kullanıcı kimliğini sabitler, hedef botu çözümler ve entegrasyonu açar.
+5. Kullanılmış `TELEGRAM_LOGIN_CODE` secret'ını silin. Kod tek kullanımlık olsa
+   da gereksiz secret bırakılmamalıdır.
+
+Telefon ve doğrulama kodu workflow girdisi değil, yalnız GitHub Actions secret'ı
+olarak kullanılmalıdır. 2FA açık hesaplar bu akış tarafından bilerek reddedilir;
+onlar için doğrudan sunucu terminali kullanılmalıdır.
+
 Kullanıcı ID tek başına giriş sağlamaz. `TELEGRAM_EXPECTED_USER_ID`, yanlış
 hesap oturumunun kullanılmasını engelleyen ek kontroldür.
