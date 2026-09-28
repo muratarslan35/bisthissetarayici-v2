@@ -1,0 +1,16 @@
+[Unit]
+Description=BIST Dashboard Health Recovery
+After=network-online.target bist-trading-web.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=@BIST_PATH@
+ExecStart=@BIST_PATH@/scripts/bist_dashboard_watchdog.sh
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=@BIST_PATH@

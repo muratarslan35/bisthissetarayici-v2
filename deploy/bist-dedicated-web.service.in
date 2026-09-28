@@ -2,8 +2,9 @@
 Description=BIST Trading Dashboard Web (Dedicated VM)
 After=network-online.target
 Wants=network-online.target
-StartLimitIntervalSec=60
-StartLimitBurst=5
+# Never leave the public dashboard stopped after a transient OOM/import fault.
+# The independent health timer below still prevents silent unhealthy states.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -28,15 +29,15 @@ ExecReload=/bin/kill -HUP $MAINPID
 KillSignal=SIGQUIT
 TimeoutStopSec=45
 Restart=always
-RestartSec=3
+RestartSec=2
 
 Nice=0
 CPUAccounting=true
 CPUWeight=100
 CPUQuota=50%
 MemoryAccounting=true
-MemoryHigh=20%
-MemoryMax=30%
+MemoryHigh=30%
+MemoryMax=45%
 MemorySwapMax=30%
 IOAccounting=true
 IOWeight=100

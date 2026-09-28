@@ -5,6 +5,8 @@ bist_path=${1:?BIST application path is required}
 web_service="bist-trading-web.service"
 worker_service="bist-trading-worker.service"
 slice_name="bist-trading.slice"
+watchdog_service="bist-dashboard-watchdog.service"
+watchdog_timer="bist-dashboard-watchdog.timer"
 
 case "$bist_path" in
   *ims-performance-manager*|*ims_system*|*IMS*Performance*)
@@ -39,6 +41,8 @@ render_unit() {
 render_unit "$bist_path/deploy/bist-dedicated-web.service.in" "$tmp_dir/$web_service"
 render_unit "$bist_path/deploy/bist-dedicated-worker.service.in" "$tmp_dir/$worker_service"
 cp "$bist_path/deploy/bist-dedicated.slice.in" "$tmp_dir/$slice_name"
+render_unit "$bist_path/deploy/bist-dashboard-watchdog.service.in" "$tmp_dir/$watchdog_service"
+cp "$bist_path/deploy/bist-dashboard-watchdog.timer.in" "$tmp_dir/$watchdog_timer"
 
 runtime_env="$tmp_dir/bist-trading.env"
 if sudo test -f /etc/bist-trading.env; then
@@ -70,11 +74,15 @@ fi
 sudo install -o root -g root -m 0644 "$tmp_dir/$slice_name" "/etc/systemd/system/$slice_name"
 sudo install -o root -g root -m 0644 "$tmp_dir/$web_service" "/etc/systemd/system/$web_service"
 sudo install -o root -g root -m 0644 "$tmp_dir/$worker_service" "/etc/systemd/system/$worker_service"
+sudo install -o root -g root -m 0644 "$tmp_dir/$watchdog_service" "/etc/systemd/system/$watchdog_service"
+sudo install -o root -g root -m 0644 "$tmp_dir/$watchdog_timer" "/etc/systemd/system/$watchdog_timer"
+sudo chmod 0755 "$bist_path/scripts/bist_dashboard_watchdog.sh"
 
 sudo systemctl daemon-reload
-sudo systemctl enable "$web_service" "$worker_service"
+sudo systemctl enable "$web_service" "$worker_service" "$watchdog_timer"
 sudo systemctl restart "$web_service"
 sudo systemctl restart "$worker_service"
+sudo systemctl restart "$watchdog_timer"
 
 # Public browser access is intentionally limited to the authenticated Flask app
 # on the dedicated BIST VM. If UFW is active, open only the dashboard port.
@@ -86,6 +94,7 @@ sleep 3
 
 echo "BIST_WEB=$(sudo systemctl is-active "$web_service")"
 echo "BIST_WORKER=$(sudo systemctl is-active "$worker_service")"
+echo "BIST_WATCHDOG=$(sudo systemctl is-active "$watchdog_timer")"
 
 curl --fail --silent --show-error http://127.0.0.1:5000/health >/tmp/bist-health.json
 python3 - <<'PY'

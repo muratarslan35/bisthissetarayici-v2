@@ -34,9 +34,10 @@ Environment=UNIVERSE_REFRESH_SECONDS=60
 Environment=UNIVERSE_DAILY_ENRICH_SECONDS=3600
 Environment=UNIVERSE_PROMOTED_MAX=140
 Environment=UNIVERSE_ENRICH_MAX=360
-Environment=FAST_WATCHLIST_SIZE=90
+Environment=FAST_WATCHLIST_SIZE=120
 Environment=FAST_POLL_SECONDS=20
 Environment=FAST_QUOTE_MAX_AGE_SECONDS=45
+Environment=FAST_STATE_MAX_AGE_SECONDS=600
 
 # Official KAP ingestion runs independently from Yahoo/full-universe scans.
 Environment=KAP_IGS_POLL_SECONDS=20
