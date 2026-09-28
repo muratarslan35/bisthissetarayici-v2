@@ -207,8 +207,9 @@ class StrategyV3Tests(unittest.TestCase):
         }
         message = sv3.format_v3_signal_message(payload)
         self.assertIn("Hareket başlangıcı", message)
-        self.assertIn("4H MOST yukarı", message)
         self.assertIn("Yakın direnç", message)
+        self.assertIn("<pre>", message)
+        self.assertNotIn("4H MOST yukarı", message)
         self.assertNotIn("fazla detay", message)
 
 
