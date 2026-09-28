@@ -484,6 +484,8 @@ def _base_signal(item, scope, algo, score, reasons, ctx, rs_pct, risk):
         "signal_scope": scope,
         "main_algorithm": algo,
         "entry_price": round(price, 2),
+        "trigger_price": round(price, 2),
+        "current_price": round(price, 2),
         "price": round(price, 2),
         "score": int(round(score)),
         "quality": "A+" if score >= 85 else "A" if score >= 75 else "B",
@@ -504,6 +506,7 @@ def _base_signal(item, scope, algo, score, reasons, ctx, rs_pct, risk):
         "avg_daily_turnover_tl": round(avg_turnover, 2) if avg_turnover else None,
         "atr_pct": round(atr_value / price * 100.0, 3) if atr_value and price else None,
         "time": _now().strftime("%H:%M:%S"),
+        "generated_at": _now().isoformat(),
         **risk,
     }
 

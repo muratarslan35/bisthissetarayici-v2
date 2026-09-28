@@ -24,7 +24,7 @@ REFRESH_SECONDS = max(60, int(os.getenv("UNIVERSE_REFRESH_SECONDS", "60")))
 DAILY_ENRICH_SECONDS = max(1800, int(os.getenv("UNIVERSE_DAILY_ENRICH_SECONDS", "3600")))
 MAX_DISCOVERED = max(300, int(os.getenv("UNIVERSE_MAX_DISCOVERED", "900")))
 PROMOTED_MAX = max(20, int(os.getenv("UNIVERSE_PROMOTED_MAX", "140")))
-FAST_WATCHLIST_SIZE = max(30, int(os.getenv("FAST_WATCHLIST_SIZE", "90")))
+FAST_WATCHLIST_SIZE = max(30, int(os.getenv("FAST_WATCHLIST_SIZE", "120")))
 ENRICH_MAX = max(100, int(os.getenv("UNIVERSE_ENRICH_MAX", "360")))
 
 MIN_PRICE = max(0.10, float(os.getenv("UNIVERSE_MIN_PRICE_TL", "1.0")))

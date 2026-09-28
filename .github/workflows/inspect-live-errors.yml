@@ -1,6 +1,7 @@
 name: Inspect Live BIST Errors
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -34,6 +35,13 @@ jobs:
           echo "WEB=$(sudo systemctl is-active bist-trading-web.service || true)"
           echo "WORKER=$(sudo systemctl is-active bist-trading-worker.service || true)"
           echo "VENV_PY=$(test -x venv/bin/python && echo yes || echo no)"
+          echo "=== SERVICE FAILURE STATE ==="
+          sudo systemctl show bist-trading-web.service \
+            -p ActiveState -p SubState -p Result -p NRestarts \
+            -p ExecMainCode -p ExecMainStatus -p MemoryCurrent -p MemoryPeak || true
+          echo "=== KERNEL OOM EVIDENCE ==="
+          sudo journalctl -k --since "4 hours ago" --no-pager \
+            | grep -Ei 'oom|out of memory|killed process|memory cgroup' | tail -80 || true
           if [ -x venv/bin/python ]; then
             venv/bin/python - <<'PY'
           import pandas, PIL
@@ -46,9 +54,9 @@ jobs:
           PY
           fi
           echo "=== WEB JOURNAL ==="
-          sudo journalctl -u bist-trading-web.service --since "15 minutes ago" --no-pager | tail -120 || true
+          sudo journalctl -u bist-trading-web.service --since "4 hours ago" --no-pager | tail -300 || true
           echo "=== WORKER JOURNAL ==="
-          sudo journalctl -u bist-trading-worker.service --since "15 minutes ago" --no-pager | tail -120 || true
+          sudo journalctl -u bist-trading-worker.service --since "4 hours ago" --no-pager | tail -200 || true
           echo "=== HEALTH ==="
           curl -sS -m 5 -i http://127.0.0.1:5000/health || true
           REMOTE

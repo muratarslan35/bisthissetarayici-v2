@@ -1,8 +1,10 @@
 import math
 import os
+import json
 import threading
 import time
 from collections import defaultdict, deque
+from pathlib import Path
 
 import requests
 
@@ -17,11 +19,19 @@ FAST_QUOTE_MAX_AGE_SECONDS = max(
     int(os.getenv("FAST_QUOTE_MAX_AGE_SECONDS", "45")),
 )
 FAST_BATCH_SIZE = max(20, int(os.getenv("FAST_QUOTE_BATCH_SIZE", "80")))
+FAST_STATE_PATH = Path(
+    os.getenv("FAST_LANE_STATE_PATH", "data/fast_lane_state.json")
+)
+FAST_STATE_MAX_AGE_SECONDS = max(
+    120,
+    int(os.getenv("FAST_STATE_MAX_AGE_SECONDS", "600")),
+)
 
 _LOCK = threading.RLock()
 _HISTORY = defaultdict(lambda: deque(maxlen=24))
 _FAILURES = 0
 _NEXT_ALLOWED = 0.0
+_LAST_CHECKPOINT = 0.0
 
 
 def _num(value, default=None):
@@ -48,6 +58,62 @@ def _clean_symbol(value):
     if not raw:
         return None
     return raw + ".IS"
+
+
+def _load_checkpoint():
+    """Restore same-session quote history after a process/server restart."""
+    if not FAST_STATE_PATH.exists():
+        return
+    try:
+        payload = json.loads(FAST_STATE_PATH.read_text(encoding="utf-8"))
+        now = time.time()
+        if now - float(payload.get("saved_at") or 0.0) > FAST_STATE_MAX_AGE_SECONDS:
+            return
+        history = payload.get("history") or {}
+        with _LOCK:
+            for raw_symbol, samples in history.items():
+                symbol = _clean_symbol(raw_symbol)
+                if not symbol or not isinstance(samples, list):
+                    continue
+                for sample in samples[-24:]:
+                    ts = _num(sample.get("ts"), 0.0) or 0.0
+                    price = _num(sample.get("price"))
+                    volume = _num(sample.get("volume"), 0.0) or 0.0
+                    if price and now - ts <= FAST_STATE_MAX_AGE_SECONDS:
+                        _HISTORY[symbol].append({
+                            "ts": ts,
+                            "price": price,
+                            "volume": volume,
+                        })
+    except Exception as exc:
+        print(f"FAST STATE LOAD ERROR: {exc}", flush=True)
+
+
+def checkpoint_fast_state(force=False):
+    """Atomically persist the light fast-lane state without slowing each poll."""
+    global _LAST_CHECKPOINT
+    now = time.time()
+    if not force and now - _LAST_CHECKPOINT < 15.0:
+        return False
+    with _LOCK:
+        history = {
+            symbol: list(samples)
+            for symbol, samples in _HISTORY.items()
+            if samples
+        }
+    try:
+        FAST_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = FAST_STATE_PATH.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps({"saved_at": now, "history": history}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        tmp.replace(FAST_STATE_PATH)
+        _LAST_CHECKPOINT = now
+        return True
+    except Exception as exc:
+        print(f"FAST STATE SAVE ERROR: {exc}", flush=True)
+        return False
 
 
 def _post_batch(symbols):
@@ -186,6 +252,7 @@ def fetch_fast_quotes(symbols):
 
         _FAILURES = 0
         _NEXT_ALLOWED = 0.0
+        checkpoint_fast_state()
         return quotes
 
     except Exception as exc:
@@ -250,4 +317,11 @@ def fast_status():
         "max_age_seconds": FAST_QUOTE_MAX_AGE_SECONDS,
         "failures": _FAILURES,
         "backoff_seconds": round(max(0.0, _NEXT_ALLOWED - time.time()), 1),
+        "checkpoint_age_seconds": (
+            round(max(0.0, time.time() - _LAST_CHECKPOINT), 1)
+            if _LAST_CHECKPOINT else None
+        ),
     }
+
+
+_load_checkpoint()

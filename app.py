@@ -76,6 +76,7 @@ from dashboard_store import (
 )
 from resource_guard import host_pressure_state
 from signal_policy import select_publishable_candidates, policy_limits
+from signal_freshness import prepare_fresh_candidates
 from telegram_market_verifier import gate_signal as external_validation_gate
 from signal_state import (
     init_signal_state,
@@ -1530,6 +1531,11 @@ def fast_lane_loop():
                     selected_fast = select_publishable_candidates(
                         fast_candidates, "INTRADAY", cycle_cap=1
                     )
+                    selected_fast = prepare_fresh_candidates(
+                        selected_fast,
+                        {symbol: quote},
+                        log=lambda msg: print(msg, flush=True),
+                    )
                     for sig in selected_fast:
                         publish_v5_signal(sig, item)
 
@@ -2157,6 +2163,28 @@ Zarar: %{round((price-entry)/entry*100,2)}
                     )
                     selected_intraday = select_publishable_candidates(
                         cycle_intraday_candidates, "INTRADAY"
+                    )
+
+                    # Execution is a separate decision from signal discovery.
+                    # Batch one current quote for every candidate and preserve
+                    # the original trigger price. Late moves are recorded in
+                    # logs but never advertised as executable entries.
+                    execution_symbols = list(dict.fromkeys(
+                        sig.get("symbol")
+                        for sig in selected_positions + selected_intraday
+                        if sig.get("symbol")
+                    ))
+                    execution_quotes = fetch_fast_quotes(execution_symbols)
+                    freshness_log = lambda msg: print(msg, flush=True)
+                    selected_positions = prepare_fresh_candidates(
+                        selected_positions,
+                        execution_quotes,
+                        log=freshness_log,
+                    )
+                    selected_intraday = prepare_fresh_candidates(
+                        selected_intraday,
+                        execution_quotes,
+                        log=freshness_log,
                     )
 
                     for sig in selected_positions:
