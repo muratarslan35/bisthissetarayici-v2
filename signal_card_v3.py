@@ -337,7 +337,9 @@ def build_signal_card(signal, item, state=None):
     _text(draw, (250, 45), "POZİSYON" if scope == "POSITION" else "GÜN İÇİ", 23, MUTED, True)
     phase = str(signal.get("market_structure_phase") or "-")
     phase_tr = {"STARTING": "HAREKET BAŞLANGICI", "EARLY_TREND": "ERKEN TREND"}.get(phase, phase)
-    _text(draw, (48, 89), f"{algo.title()}  ·  {phase_tr}", 17, CYAN, True)
+    bot_support = signal.get("bot_support") or {}
+    bot_badge = "BOT TEYİTLİ · " if bot_support else ""
+    _text(draw, (48, 89), f"{bot_badge}{algo.title()}  ·  {phase_tr}", 17, GREEN if bot_support else CYAN, True)
     _text(draw, (W - 48, 39), f"{stage} · {score:.0f}/100", 27, _stage_color(stage), True, "ra")
     _text(draw, (W - 48, 85), "PROFESYONEL YAPI MOTORU", 14, MUTED, True, "ra")
 
@@ -434,6 +436,9 @@ def build_signal_card(signal, item, state=None):
     confirmations = list(signal.get("technical_confirmations") or [])
     if not confirmations:
         confirmations = list(signal.get("reasons") or [])
+    elif bot_support:
+        evidence = "Bot destekli: teorik eşleşme teyidi" if bot_support.get("evidence") == "TEORIK" else "Bot destekli: derinlik teyidi"
+        confirmations.insert(0, evidence)
     yy = 1202 + oy
     for evidence in confirmations[:5]:
         _text(draw, (598, yy), "✓", 18, GREEN, True)

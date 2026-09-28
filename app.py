@@ -76,6 +76,7 @@ from dashboard_store import (
 )
 from resource_guard import host_pressure_state
 from signal_policy import select_publishable_candidates, policy_limits
+from telegram_market_verifier import gate_signal as external_validation_gate
 from signal_state import (
     init_signal_state,
     assess_signal_transition,
@@ -464,6 +465,9 @@ def _upgrade_caption(signal, transition):
 
 
 def publish_v5_signal(signal, item):
+    signal = external_validation_gate(signal)
+    if signal is None:
+        return False
     signal = enrich_routing(signal)
     transition = assess_signal_transition(signal)
     action = transition.get("action")

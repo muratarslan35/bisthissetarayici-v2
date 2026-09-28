@@ -1288,6 +1288,16 @@ def format_v3_signal_message(signal):
     if signal.get("event_title"):
         lines.append(f"📰 KAP teyidi: {signal.get('event_title')}")
 
+    bot_support = signal.get("bot_support") or {}
+    if bot_support.get("evidence") == "TEORIK":
+        lines.append(
+            "🤖 <b>BOT DESTEKLİ TEYİT</b> · Teorik eşleşme "
+            f"{bot_support.get('theoretical_price')} / {bot_support.get('theoretical_quantity')} lot"
+        )
+    elif bot_support.get("evidence") == "DERINLIK":
+        ratio = bot_support.get("buy_sell_ratio")
+        lines.append(f"🤖 <b>BOT DESTEKLİ TEYİT</b> · Derinlik alış/satış {ratio}x")
+
     calibration_status = signal.get("calibration_status")
     calibration_n = signal.get("calibration_sample_size")
     if calibration_status == "CALIBRATED":
