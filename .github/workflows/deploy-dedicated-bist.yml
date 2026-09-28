@@ -67,10 +67,40 @@ jobs:
           mkdir -p .venvs
           release="$(git rev-parse --short=12 HEAD)"
           next_venv="$PWD/.venvs/$release"
-          rm -rf "$next_venv"
-          python3 -m venv "$next_venv"
-          "$next_venv/bin/python" -m pip install -q --upgrade pip setuptools wheel
-          "$next_venv/bin/python" -m pip install -q -r requirements.txt
+          requirements_hash="$(sha256sum requirements.txt | awk '{print $1}')"
+          current_venv=""
+          current_hash=""
+          if [ -L venv ]; then
+            current_venv="$(readlink -f venv || true)"
+            if [ -n "$current_venv" ] && [ -f "$current_venv/.requirements.sha256" ]; then
+              current_hash="$(cat "$current_venv/.requirements.sha256")"
+            fi
+          fi
+
+          if [ -n "$current_venv" ] && [ -x "$current_venv/bin/gunicorn" ] && \
+             { [ "$current_hash" = "$requirements_hash" ] || [ -z "$current_hash" ]; }; then
+            next_venv="$current_venv"
+            printf '%s\n' "$requirements_hash" > "$next_venv/.requirements.sha256"
+            echo "VENV_REUSED=1"
+          else
+            rm -rf "$next_venv"
+            python3 -m venv "$next_venv"
+            for attempt in 1 2 3; do
+              if "$next_venv/bin/python" -m pip install -q --timeout 60 --retries 5 \
+                   --upgrade pip setuptools wheel && \
+                 "$next_venv/bin/python" -m pip install -q --timeout 60 --retries 5 \
+                   -r requirements.txt; then
+                break
+              fi
+              if [ "$attempt" = 3 ]; then
+                echo "Dependency installation failed after 3 attempts" >&2
+                exit 1
+              fi
+              sleep $((attempt * 10))
+            done
+            printf '%s\n' "$requirements_hash" > "$next_venv/.requirements.sha256"
+            echo "VENV_REUSED=0"
+          fi
           "$next_venv/bin/python" -m compileall -q .
           echo "PYTHON_COMPILE=PASS"
 
@@ -84,8 +114,10 @@ jobs:
             previous_target="$legacy"
           fi
 
-          ln -s "$next_venv" venv.next
-          mv -Tf venv.next venv
+          if [ "$(readlink -f venv 2>/dev/null || true)" != "$next_venv" ]; then
+            ln -s "$next_venv" venv.next
+            mv -Tf venv.next venv
+          fi
           test -x venv/bin/python
           test -x venv/bin/gunicorn
           echo "VENV_SWITCH=PASS"
