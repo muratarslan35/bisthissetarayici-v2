@@ -24,7 +24,7 @@ from database import get_connection
 TR_TZ = ZoneInfo("Europe/Istanbul")
 SOURCE = "borsabilgibot"
 DAILY_HARD_LIMIT = min(10, max(1, int(os.getenv("EXTERNAL_VERIFY_DAILY_LIMIT", "10"))))
-MIN_SCORE = float(os.getenv("EXTERNAL_VERIFY_MIN_SCORE", "88"))
+MIN_SCORE = float(os.getenv("EXTERNAL_VERIFY_MIN_SCORE", "95"))
 ENABLED = os.getenv("EXTERNAL_VERIFY_ENABLED", "0") == "1"
 TARGET = os.getenv("EXTERNAL_VERIFY_TARGET", "borsabilgibot").lstrip("@")
 EXPECTED_USER_ID = os.getenv("TELEGRAM_EXPECTED_USER_ID", "").strip()

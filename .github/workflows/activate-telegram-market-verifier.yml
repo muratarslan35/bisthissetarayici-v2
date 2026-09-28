@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 5
     environment: production
     steps:
+      - uses: actions/checkout@v4
+
       - name: Configure SSH
         env:
           KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
@@ -29,6 +31,15 @@ jobs:
       - name: Validate session and restart BIST services
         run: |
           set -Eeuo pipefail
+          scp -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            scripts/set_external_verify_policy.py \
+            ubuntu@89.168.99.141:/tmp/set_external_verify_policy.py
+          printf '%s\n' '95' | ssh -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            ubuntu@89.168.99.141 \
+            'sudo /usr/bin/python3 /tmp/set_external_verify_policy.py && sudo rm -f /tmp/set_external_verify_policy.py'
+
           ssh -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -o ServerAliveInterval=20 -o ServerAliveCountMax=6 \
@@ -40,7 +51,8 @@ jobs:
             /^TELEGRAM_EXPECTED_USER_ID=/{user=($2 ~ /^[0-9]+$/)}
             /^EXTERNAL_VERIFY_ENABLED=/{enabled=($2==1)}
             /^EXTERNAL_VERIFY_DAILY_LIMIT=/{limit=($2==10)}
-            END {exit !(session && user && enabled && limit)}
+            /^EXTERNAL_VERIFY_MIN_SCORE=/{score=($2==95)}
+            END {exit !(session && user && enabled && limit && score)}
           ' /etc/bist-trading.env
 
           sudo systemctl restart bist-trading-web.service bist-trading-worker.service
@@ -51,6 +63,7 @@ jobs:
                curl --fail --silent --max-time 3 http://127.0.0.1:5000/health >/dev/null; then
               echo "TELEGRAM_SESSION_RUNTIME=ACTIVE"
               echo "EXTERNAL_VERIFY_DAILY_LIMIT=10"
+              echo "EXTERNAL_VERIFY_MIN_SCORE=95"
               echo "BIST_SERVICES=HEALTHY"
               exit 0
             fi
