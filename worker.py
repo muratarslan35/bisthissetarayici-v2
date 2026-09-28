@@ -12,9 +12,11 @@ from app import (
 )
 from ultra_price_engine import start_engine
 from volume_engine import load_volume_cache, save_volume_cache
+from telegram_market_verifier import start_worker as start_external_verify_worker
 
 
 if __name__ == "__main__":
+    start_external_verify_worker()
     if ENABLE_ULTRA_PRICE_ENGINE:
         print("OPTIONAL ultra price engine enabled")
         start_engine(ENGINE_SYMBOLS)

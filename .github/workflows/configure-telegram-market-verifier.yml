@@ -1,0 +1,86 @@
+name: Configure Telegram Market Verifier
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: configure-telegram-market-verifier
+  cancel-in-progress: false
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+      TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        run: |
+          set -Eeuo pipefail
+          test -n "$TELEGRAM_API_ID"
+          test -n "$TELEGRAM_API_HASH"
+          [[ "$TELEGRAM_API_ID" =~ ^[0-9]+$ ]]
+          [[ "$TELEGRAM_API_HASH" =~ ^[0-9a-fA-F]{32}$ ]]
+          echo "::add-mask::$TELEGRAM_API_ID"
+          echo "::add-mask::$TELEGRAM_API_HASH"
+          echo "TELEGRAM_API_SECRETS=VALID"
+
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+
+      - name: Install API credentials on dedicated BIST VM
+        run: |
+          set -Eeuo pipefail
+          echo "::add-mask::$TELEGRAM_API_ID"
+          echo "::add-mask::$TELEGRAM_API_HASH"
+
+          scp -i ~/.ssh/key \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            scripts/install_telegram_api_secrets.py \
+            ubuntu@89.168.99.141:/tmp/install_telegram_api_secrets.py
+
+          {
+            printf '%s\n' "$TELEGRAM_API_ID"
+            printf '%s\n' "$TELEGRAM_API_HASH"
+          } | ssh -i ~/.ssh/key \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=15 ubuntu@89.168.99.141 \
+            'sudo /usr/bin/python3 /tmp/install_telegram_api_secrets.py'
+
+          ssh -i ~/.ssh/key \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            ubuntu@89.168.99.141 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          sudo test "$(sudo stat -c '%a' /etc/bist-trading.env)" = 600
+          sudo awk -F= '
+            /^TELEGRAM_API_ID=/{id=($2 ~ /^[0-9]+$/)}
+            /^TELEGRAM_API_HASH=/{hash=(length($2)==32)}
+            /^EXTERNAL_VERIFY_ENABLED=/{disabled=($2==0)}
+            END {exit !(id && hash && disabled)}
+          ' /etc/bist-trading.env
+          echo "TELEGRAM_API_INSTALL=PASS"
+          echo "EXTERNAL_VERIFY_ENABLED=0"
+          sudo rm -f /tmp/install_telegram_api_secrets.py
+          REMOTE
+
+      - name: Remove temporary SSH key
+        if: ${{ always() }}
+        run: rm -f ~/.ssh/key

@@ -63,6 +63,12 @@ PY
 fi
 
 sudo install -o root -g root -m 0600 "$runtime_env" /etc/bist-trading.env
+if grep -Eq '^[[:space:]]*EXTERNAL_VERIFY_ENABLED[[:space:]]*=[[:space:]]*1' "$runtime_env"; then
+  command -v tesseract >/dev/null 2>&1 || {
+    echo "External verification requires tesseract-ocr; refusing incomplete BIST deploy." >&2
+    exit 1
+  }
+fi
 sudo install -o root -g root -m 0644 "$tmp_dir/$slice_name" "/etc/systemd/system/$slice_name"
 sudo install -o root -g root -m 0644 "$tmp_dir/$web_service" "/etc/systemd/system/$web_service"
 sudo install -o root -g root -m 0644 "$tmp_dir/$worker_service" "/etc/systemd/system/$worker_service"

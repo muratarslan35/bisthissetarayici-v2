@@ -123,6 +123,38 @@ def init_db():
     )
     """)
 
+    # Third-party market verification requests are deliberately persisted.
+    # UNIQUE(trade_date, symbol) prevents duplicate questions after restarts,
+    # while the transaction in telegram_market_verifier.py enforces the hard
+    # market-wide daily ceiling.
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS external_market_verifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trade_date TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'borsabilgibot',
+        command TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        requested_at TEXT NOT NULL,
+        response_at TEXT,
+        response_text TEXT,
+        parsed_json TEXT,
+        error TEXT,
+        depth_command TEXT,
+        depth_status TEXT,
+        depth_requested_at TEXT,
+        depth_response_at TEXT,
+        depth_response_text TEXT,
+        depth_parsed_json TEXT,
+        depth_error TEXT,
+        UNIQUE(trade_date, symbol)
+    )
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_external_market_verification_queue
+    ON external_market_verifications(status, trade_date, id)
+    """)
+
     conn.commit()
 
     # ==================================================
@@ -144,6 +176,13 @@ def init_db():
     ensure_column_exists(cur, "invite_codes", "is_used", "INTEGER DEFAULT 0")
     ensure_column_exists(cur, "invite_codes", "used_by", "TEXT")
     ensure_column_exists(cur, "invite_codes", "expires_at", "TEXT")
+    ensure_column_exists(cur, "external_market_verifications", "depth_command", "TEXT")
+    ensure_column_exists(cur, "external_market_verifications", "depth_status", "TEXT")
+    ensure_column_exists(cur, "external_market_verifications", "depth_requested_at", "TEXT")
+    ensure_column_exists(cur, "external_market_verifications", "depth_response_at", "TEXT")
+    ensure_column_exists(cur, "external_market_verifications", "depth_response_text", "TEXT")
+    ensure_column_exists(cur, "external_market_verifications", "depth_parsed_json", "TEXT")
+    ensure_column_exists(cur, "external_market_verifications", "depth_error", "TEXT")
 
     conn.commit()
     conn.close()
