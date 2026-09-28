@@ -1,0 +1,47 @@
+name: Telegram User Session - Send Code
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telegram-user-session
+  cancel-in-progress: false
+
+jobs:
+  send-code:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: production
+    env:
+      TELEGRAM_PHONE: ${{ secrets.TELEGRAM_PHONE }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate phone secret
+        run: |
+          set -Eeuo pipefail
+          test -n "$TELEGRAM_PHONE"
+          echo "::add-mask::$TELEGRAM_PHONE"
+          [[ "$TELEGRAM_PHONE" =~ ^\+[1-9][0-9]{7,14}$ ]]
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+      - name: Send Telegram login code
+        run: |
+          set -Eeuo pipefail
+          echo "::add-mask::$TELEGRAM_PHONE"
+          scp -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            scripts/telegram_session_browser_flow.py ubuntu@89.168.99.141:/tmp/telegram_session_browser_flow.py
+          printf '%s\n' "$TELEGRAM_PHONE" | ssh -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=20 -o ServerAliveCountMax=6 \
+            ubuntu@89.168.99.141 \
+            'sudo /home/ubuntu/bistbot/venv/bin/python /tmp/telegram_session_browser_flow.py start'
+      - if: ${{ always() }}
+        run: rm -f ~/.ssh/key
