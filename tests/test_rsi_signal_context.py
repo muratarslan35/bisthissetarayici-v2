@@ -14,7 +14,7 @@ class RsiSignalContextTests(unittest.TestCase):
         series = pd.Series([10.0] * 40)
         self.assertEqual(_rsi_wilder(series, 14), 50.0)
 
-    def test_intraday_message_shows_15m_and_4h_rsi(self):
+    def test_intraday_message_keeps_rsi_summary_without_duplicate_kpis(self):
         signal = {
             "signal_scope": "INTRADAY",
             "symbol": "TEST.IS",
@@ -34,13 +34,14 @@ class RsiSignalContextTests(unittest.TestCase):
             "reasons": [],
         }
         message = format_v3_signal_message(signal)
-        self.assertIn("RSI15 61.25", message)
-        self.assertIn("RSI4s 57.8", message)
+        self.assertIn("GÜÇLÜ VE GELİŞEN", message)
+        self.assertNotIn("RSI15 61.25", message)
+        self.assertNotIn("RSI4s 57.8", message)
         self.assertIn("82/100", message)
         self.assertIn("Erken Hareket Başlangıcı", message)
         self.assertNotIn("RISK_ON", message)
 
-    def test_position_message_shows_4h_and_daily_rsi(self):
+    def test_position_message_omits_card_level_rsi_values(self):
         signal = {
             "signal_scope": "POSITION",
             "symbol": "TEST.IS",
@@ -60,8 +61,9 @@ class RsiSignalContextTests(unittest.TestCase):
             "reasons": [],
         }
         message = format_v3_signal_message(signal)
-        self.assertIn("RSI4s 58.4", message)
-        self.assertIn("RSI1g 63.7", message)
+        self.assertIn("ANA TREND SAĞLIKLI", message)
+        self.assertNotIn("RSI4s 58.4", message)
+        self.assertNotIn("RSI1g 63.7", message)
 
 
 if __name__ == "__main__":

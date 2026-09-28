@@ -1246,41 +1246,25 @@ def format_v3_signal_message(signal):
     symbol = str(signal.get("symbol") or "").replace(".IS", "")
 
     header = "📌 <b>POZİSYON SİNYALİ</b>" if scope == "POSITION" else "⚡ <b>GÜN İÇİ SİNYAL</b>"
+    phase_label = {
+        "STARTING": "Hareket başlangıcı",
+        "EARLY_TREND": "Erken trend",
+    }.get(signal.get("market_structure_phase"), algo_tr)
     lines = [
-        f"{header} | <b>{symbol}</b>",
-        f"{strength} · <b>{score}/100</b> · {algo_tr}",
-        f"🧭 {_rsi_phase_tr(signal)}",
+        f"{header} · <b>{symbol}</b>",
+        f"{strength} · <b>{score}/100</b>",
+        f"🧭 {phase_label} · {_rsi_phase_tr(signal).replace('⚪ ', '').replace('🟢 ', '').replace('🟠 ', '').replace('🟡 ', '').replace('🔴 ', '')}",
         "",
-        f"💰 Giriş <b>{signal.get('entry_price')}</b> · Stop <b>{signal.get('stop_loss')}</b> (%{signal.get('risk_pct')})",
-        f"🎯 H1 <b>{signal.get('tp1')}</b> · H2 <b>{signal.get('tp2')}</b> · H3 <b>{signal.get('tp3')}</b>",
+        "<pre>",
+        f"Giriş : {signal.get('entry_price')}",
+        f"Stop  : {signal.get('stop_loss')}  (%{signal.get('risk_pct')})",
+        f"Hedef : {signal.get('tp1')} → {signal.get('tp2')} → {signal.get('tp3')}",
+        "</pre>",
     ]
 
-    tech = []
-    if signal.get("rsi_15m") is not None and scope != "POSITION":
-        tech.append(f"RSI15 {signal.get('rsi_15m')}")
-    if signal.get("rsi_4h") is not None:
-        tech.append(f"RSI4s {signal.get('rsi_4h')}")
-    if signal.get("rsi_1d") is not None and scope == "POSITION":
-        tech.append(f"RSI1g {signal.get('rsi_1d')}")
-    if signal.get("session_rvol") is not None:
-        tech.append(f"Hacim {signal.get('session_rvol')}x")
-    if signal.get("relative_strength_percentile") is not None:
-        tech.append(f"RS %{signal.get('relative_strength_percentile')}")
-    if tech:
-        lines.append("📊 " + " · ".join(tech))
-
-    if scope == "POSITION" and signal.get("market_structure_phase"):
-        phase_label = {
-            "STARTING": "Hareket başlangıcı",
-            "EARLY_TREND": "Erken trend",
-        }.get(signal.get("market_structure_phase"), signal.get("market_structure_phase"))
-        lines.append(f"🏗 Yapı: <b>{phase_label}</b>")
-        confirmations = signal.get("technical_confirmations") or []
-        if confirmations:
-            lines.append("🔎 " + " • ".join(str(x) for x in confirmations[:2]))
-        warnings = signal.get("technical_warnings") or []
-        if warnings:
-            lines.append("⚠️ İzlenen risk: " + str(warnings[0]))
+    warnings = signal.get("technical_warnings") or []
+    if warnings:
+        lines.append("⚠️ <b>Risk:</b> " + str(warnings[0]))
 
     if signal.get("fast_change_60s_pct") is not None:
         lines.append(f"⚡ 60 sn ivme %{signal.get('fast_change_60s_pct')}")
@@ -1298,22 +1282,9 @@ def format_v3_signal_message(signal):
         ratio = bot_support.get("buy_sell_ratio")
         lines.append(f"🤖 <b>BOT DESTEKLİ TEYİT</b> · Derinlik alış/satış {ratio}x")
 
-    calibration_status = signal.get("calibration_status")
-    calibration_n = signal.get("calibration_sample_size")
-    if calibration_status == "CALIBRATED":
-        probability = float(signal.get("estimated_success_probability") or 0.0) * 100.0
-        lines.append(f"🧪 Tarihsel kalibrasyon: %{probability:.1f} · n={calibration_n}")
-    elif calibration_status:
-        lines.append(f"🧪 İstatistiksel durum: öğrenme aşaması · n={calibration_n or 0}")
-
-    reasons = signal.get("reasons") or []
-    if reasons:
-        short = " • ".join(str(x) for x in reasons[:3])
-        lines.append(f"✅ {short}")
-
     if scope == "POSITION":
-        lines.append("⏱ Takip: 2–10 işlem günü")
+        lines.append("⏱ <b>Takip:</b> 2–10 işlem günü")
     else:
-        lines.append("⏱ Gün içi; tavan/uzama ve tekrar sinyal filtreleri uygulanmıştır.")
+        lines.append("⏱ <b>Takip:</b> Gün içi")
 
     return "\n".join(lines)
