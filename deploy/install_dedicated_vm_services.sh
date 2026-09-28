@@ -66,10 +66,22 @@ fi
 
 sudo install -o root -g root -m 0600 "$runtime_env" /etc/bist-trading.env
 if grep -Eq '^[[:space:]]*EXTERNAL_VERIFY_ENABLED[[:space:]]*=[[:space:]]*1' "$runtime_env"; then
-  command -v tesseract >/dev/null 2>&1 || {
-    echo "External verification requires tesseract-ocr; refusing incomplete BIST deploy." >&2
-    exit 1
-  }
+  if ! command -v tesseract >/dev/null 2>&1; then
+    echo "Installing required tesseract-ocr package"
+    installed=0
+    for attempt in 1 2 3; do
+      if sudo apt-get update -qq && \
+         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq tesseract-ocr; then
+        installed=1
+        break
+      fi
+      sleep $((attempt * 10))
+    done
+    if [ "$installed" != 1 ] || ! command -v tesseract >/dev/null 2>&1; then
+      echo "External verification requires tesseract-ocr; installation failed." >&2
+      exit 1
+    fi
+  fi
 fi
 sudo install -o root -g root -m 0644 "$tmp_dir/$slice_name" "/etc/systemd/system/$slice_name"
 sudo install -o root -g root -m 0644 "$tmp_dir/$web_service" "/etc/systemd/system/$web_service"
