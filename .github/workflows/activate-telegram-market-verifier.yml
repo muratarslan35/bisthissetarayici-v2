@@ -1,0 +1,66 @@
+name: Activate Telegram Market Verifier
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: activate-telegram-market-verifier
+  cancel-in-progress: false
+
+jobs:
+  activate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+
+      - name: Validate session and restart BIST services
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/key -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=20 -o ServerAliveCountMax=6 \
+            ubuntu@89.168.99.141 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          sudo test "$(sudo stat -c '%a' /etc/bist-trading.env)" = 600
+          sudo awk -F= '
+            /^TELEGRAM_USER_SESSION=/{session=(length($2)>100)}
+            /^TELEGRAM_EXPECTED_USER_ID=/{user=($2 ~ /^[0-9]+$/)}
+            /^EXTERNAL_VERIFY_ENABLED=/{enabled=($2==1)}
+            /^EXTERNAL_VERIFY_DAILY_LIMIT=/{limit=($2==10)}
+            END {exit !(session && user && enabled && limit)}
+          ' /etc/bist-trading.env
+
+          sudo systemctl restart bist-trading-web.service bist-trading-worker.service
+          for attempt in $(seq 1 20); do
+            web=$(sudo systemctl is-active bist-trading-web.service || true)
+            worker=$(sudo systemctl is-active bist-trading-worker.service || true)
+            if [ "$web" = active ] && [ "$worker" = active ] && \
+               curl --fail --silent --max-time 3 http://127.0.0.1:5000/health >/dev/null; then
+              echo "TELEGRAM_SESSION_RUNTIME=ACTIVE"
+              echo "EXTERNAL_VERIFY_DAILY_LIMIT=10"
+              echo "BIST_SERVICES=HEALTHY"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "BIST services did not become healthy" >&2
+          sudo systemctl --no-pager --full status bist-trading-web.service bist-trading-worker.service || true
+          exit 1
+          REMOTE
+
+      - name: Remove temporary SSH key
+        if: ${{ always() }}
+        run: rm -f ~/.ssh/key
