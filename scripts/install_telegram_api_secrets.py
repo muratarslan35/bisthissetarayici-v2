@@ -29,7 +29,7 @@ def install(api_id: str, api_hash: str, path: Path = ENV_PATH) -> None:
         # Activation is a separate interactive user-session step.
         "EXTERNAL_VERIFY_ENABLED": "0",
         "EXTERNAL_VERIFY_DAILY_LIMIT": "10",
-        "EXTERNAL_VERIFY_MIN_SCORE": "88",
+        "EXTERNAL_VERIFY_MIN_SCORE": "95",
         "EXTERNAL_VERIFY_TARGET": "borsabilgibot",
     }
 

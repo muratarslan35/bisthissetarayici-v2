@@ -15,7 +15,9 @@ adayları `@borsabilgibot` üzerinden sorgular.
 - Böylece günlük toplam 10–20 yazılı komut ve en fazla 10 görüntü düğmesi
   etkileşimi vardır. On sembollük havuz hiçbir koşulda aşılmaz.
 - Timeout/hata ilgili aşamanın hakkını tüketir; otomatik retry yapılmaz.
-- Havuza yalnız profesyonel puanı en az 88 olan son adaylar alınır.
+- Havuza yalnız profesyonel puanı en az 95 olan seçkin adaylar alınır. Bu eşik
+  yalnız dış bot doğrulama kotası içindir; sistemin kendi güçlü sinyallerini
+  günün devamında durdurmaz.
 - Görsel; sembol, fiyat, hacim, kademe toplamları ve gerçekleşen alan/satan
   satırlarıyla birlikte OCR edilir. Sembol eşleşmezse, yeterli kademe/işlem
   okunmazsa veya toplamlar tutarsızsa trade teyidi üretilmez.
@@ -26,7 +28,7 @@ adayları `@borsabilgibot` üzerinden sorgular.
 ```dotenv
 EXTERNAL_VERIFY_ENABLED=1
 EXTERNAL_VERIFY_DAILY_LIMIT=10
-EXTERNAL_VERIFY_MIN_SCORE=88
+EXTERNAL_VERIFY_MIN_SCORE=95
 EXTERNAL_VERIFY_TARGET=borsabilgibot
 EXTERNAL_VERIFY_THEORETICAL_COMMAND=/teorik {symbol}
 EXTERNAL_VERIFY_DEPTH_COMMAND=/derinlik {symbol}

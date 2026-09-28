@@ -90,19 +90,20 @@ class TelegramMarketVerifierTests(unittest.TestCase):
     def test_only_trade_ready_candidate_is_eligible(self):
         now = datetime(2026, 9, 28, 10, 0, tzinfo=ZoneInfo("Europe/Istanbul"))
         ready = {
-            "symbol": "THYAO.IS", "score": 91, "signal_scope": "INTRADAY",
+            "symbol": "THYAO.IS", "score": 96, "signal_scope": "INTRADAY",
             "entry_price": 300, "stop_loss": 292, "tp1": 310,
             "risk_pct": 2.67, "data_confidence": 95,
             "relative_strength_percentile": 93, "session_rvol": 1.6,
         }
         self.assertTrue(verifier.eligible(ready, now))
+        self.assertFalse(verifier.eligible(dict(ready, score=94), now))
         not_ready = dict(ready, session_rvol=0.8)
         self.assertFalse(verifier.eligible(not_ready, now))
 
     def test_non_pool_signal_has_no_bot_label(self):
         now = datetime(2026, 9, 28, 10, 30, tzinfo=ZoneInfo("Europe/Istanbul"))
         signal = {
-            "symbol": "THYAO.IS", "score": 91, "signal_scope": "INTRADAY",
+            "symbol": "THYAO.IS", "score": 96, "signal_scope": "INTRADAY",
             "entry_price": 300, "stop_loss": 292, "tp1": 310, "tp2": 315, "tp3": 320,
             "risk_pct": 2.67, "data_confidence": 95,
             "relative_strength_percentile": 93, "session_rvol": 1.6,
@@ -118,7 +119,7 @@ class TelegramMarketVerifierTests(unittest.TestCase):
     def test_theoretical_contribution_is_visibly_labeled(self):
         now = datetime(2026, 9, 28, 9, 55, tzinfo=ZoneInfo("Europe/Istanbul"))
         signal = {
-            "symbol": "THYAO.IS", "score": 91, "signal_scope": "INTRADAY",
+            "symbol": "THYAO.IS", "score": 96, "signal_scope": "INTRADAY",
             "entry_price": 300, "stop_loss": 292, "tp1": 310, "tp2": 315, "tp3": 320,
             "risk_pct": 2.67, "data_confidence": 95,
             "relative_strength_percentile": 93, "session_rvol": 1.6,
