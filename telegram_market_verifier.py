@@ -31,6 +31,9 @@ EXPECTED_USER_ID = os.getenv("TELEGRAM_EXPECTED_USER_ID", "").strip()
 THEORETICAL_COMMAND = os.getenv("EXTERNAL_VERIFY_THEORETICAL_COMMAND", "/teorik {symbol}")
 DEPTH_COMMAND = os.getenv("EXTERNAL_VERIFY_DEPTH_COMMAND", "/derinlik {symbol}")
 RESPONSE_TIMEOUT = min(45, max(5, int(os.getenv("EXTERNAL_VERIFY_TIMEOUT", "20"))))
+REQUEST_GAP_SECONDS = min(
+    30, max(5, int(os.getenv("EXTERNAL_VERIFY_REQUEST_GAP_SECONDS", "10")))
+)
 
 _worker_started = False
 _worker_lock = threading.Lock()
@@ -517,6 +520,11 @@ def _worker():
         except Exception as exc:
             # No automatic retry: each stage is allowed exactly one outbound request.
             _finish(row["id"], row["query_kind"], "FAILED", error=str(exc)[:500])
+        finally:
+            # The source bot may withhold responses when several commands arrive
+            # back-to-back. Keep every request strictly sequential and leave a
+            # courteous pause even after a timeout/failure.
+            threading.Event().wait(REQUEST_GAP_SECONDS)
 
 
 def start_worker():

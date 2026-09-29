@@ -81,6 +81,10 @@ class TelegramMarketVerifierTests(unittest.TestCase):
         )
         self.assertTrue(parsed["confirmation"])
 
+    def test_request_gap_is_rate_safe(self):
+        self.assertGreaterEqual(verifier.REQUEST_GAP_SECONDS, 5)
+        self.assertLessEqual(verifier.REQUEST_GAP_SECONDS, 30)
+
     def test_parser_confirms_numerical_theoretical_evidence(self):
         parsed = verifier.parse_response(
             "Teorik eşleşme fiyatı: 21,84\nEşleşme miktarı: 145.000\nAlış fazlası"
