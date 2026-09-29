@@ -154,6 +154,14 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_external_market_verification_queue
     ON external_market_verifications(status, trade_date, id)
     """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS external_market_runtime (
+        source TEXT PRIMARY KEY,
+        cooldown_until TEXT,
+        cooldown_reason TEXT,
+        updated_at TEXT NOT NULL
+    )
+    """)
 
     conn.commit()
 

@@ -72,7 +72,14 @@ def init_trade_ledger():
         opened_at TEXT NOT NULL,
         expires_at TEXT NOT NULL,
         closed_at TEXT,
-        metadata_json TEXT
+        metadata_json TEXT,
+        tracking_days_json TEXT NOT NULL DEFAULT '[]',
+        tracking_path_json TEXT NOT NULL DEFAULT '[]',
+        tracking_day_count INTEGER NOT NULL DEFAULT 0,
+        stop_breached INTEGER NOT NULL DEFAULT 0,
+        stop_breached_at TEXT,
+        stop_breach_price REAL,
+        tp3_hit INTEGER NOT NULL DEFAULT 0
     )
     """)
 
@@ -100,6 +107,15 @@ def init_trade_ledger():
     _ensure_column(cur, "strategy_signals", "calibration_sample_size", "INTEGER")
     _ensure_column(cur, "strategy_signals", "shadow_variant", "TEXT")
     _ensure_column(cur, "paper_trades", "shadow_variant", "TEXT")
+    _ensure_column(cur, "paper_trades", "tracking_days_json", "TEXT NOT NULL DEFAULT '[]'")
+    _ensure_column(cur, "paper_trades", "tracking_path_json", "TEXT NOT NULL DEFAULT '[]'")
+    _ensure_column(cur, "paper_trades", "tracking_day_count", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(cur, "paper_trades", "stop_breached", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(cur, "paper_trades", "stop_breached_at", "TEXT")
+    _ensure_column(cur, "paper_trades", "stop_breach_price", "REAL")
+    _ensure_column(cur, "paper_trades", "tp3_hit", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(cur, "paper_trades", "pre_tracking_exit_reason", "TEXT")
+    _ensure_column(cur, "paper_trades", "pre_tracking_closed_at", "TEXT")
     _ensure_column(
         cur,
         "paper_trades",
@@ -115,6 +131,39 @@ def init_trade_ledger():
     CREATE INDEX IF NOT EXISTS idx_paper_trades_policy_scope_time
     ON paper_trades(policy_version, scope, opened_at)
     """)
+
+    # Preserve recent bot/position candidates that the legacy lifecycle closed
+    # early at a stop or target. Their old close reason remains auditable while
+    # the record resumes the requested ten-session observation window.
+    cutoff = (_now() - timedelta(days=16)).isoformat()
+    cur.execute("""
+    SELECT id, opened_at, entry_price, exit_reason, closed_at
+    FROM paper_trades
+    WHERE scope='POSITION' AND status='CLOSED' AND opened_at>=?
+      AND exit_reason IN ('STOP', 'TRAILING_STOP', 'TP3', 'TIME_EXIT')
+      AND pre_tracking_exit_reason IS NULL
+    """, (cutoff,))
+    for legacy in cur.fetchall():
+        opened_day = str(legacy["opened_at"] or "")[:10]
+        entry = float(legacy["entry_price"] or 0)
+        path = [{
+            "date": opened_day, "first": entry, "last": entry,
+            "high": entry, "low": entry, "return_pct": 0.0,
+        }] if opened_day else []
+        breached = 1 if legacy["exit_reason"] in {"STOP", "TRAILING_STOP"} else 0
+        cur.execute("""
+        UPDATE paper_trades SET status='OPEN', exit_price=NULL, result_pct=NULL,
+            exit_reason=NULL, closed_at=NULL, estimated_exit_cost_bps=NULL,
+            modeled_exit_price=NULL, gross_result_pct=NULL, net_result_pct=NULL,
+            tracking_days_json=?, tracking_path_json=?, tracking_day_count=?,
+            stop_breached=?, stop_breached_at=?, pre_tracking_exit_reason=?,
+            pre_tracking_closed_at=? WHERE id=?
+        """, (
+            json.dumps([opened_day] if opened_day else []), json.dumps(path),
+            1 if opened_day else 0, breached,
+            legacy["closed_at"] if breached else None,
+            legacy["exit_reason"], legacy["closed_at"], legacy["id"],
+        ))
 
     conn.commit()
     conn.close()
@@ -198,9 +247,9 @@ def record_signal(signal):
             entry_price, stop_loss, tp1, tp2, tp3, trailing_stop,
             max_price, min_price, opened_at, expires_at, metadata_json,
             policy_version, execution_model_version, estimated_entry_cost_bps,
-            modeled_entry_price
-            , shadow_variant
-        ) VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            modeled_entry_price, shadow_variant, tracking_days_json,
+            tracking_path_json, tracking_day_count
+        ) VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             fingerprint,
             signal.get("symbol"),
@@ -220,6 +269,13 @@ def record_signal(signal):
             policy_version, entry_execution["model_version"],
             entry_execution["cost_bps"], entry_execution["fill_price"],
             signal.get("shadow_variant"),
+            json.dumps([now.date().isoformat()]),
+            json.dumps([{
+                "date": now.date().isoformat(), "first": signal.get("entry_price"),
+                "last": signal.get("entry_price"), "high": signal.get("entry_price"),
+                "low": signal.get("entry_price"), "return_pct": 0.0,
+            }]),
+            1,
         ))
 
     conn.commit()
@@ -289,64 +345,87 @@ def update_open_trades(symbol, price):
         modeled_entry = float(trade["modeled_entry_price"] or entry)
         max_price = max(float(trade["max_price"] or entry), price)
         min_price = min(float(trade["min_price"] or entry), price)
-        mfe = _pct(max_price, entry)
-        mae = _pct(min_price, entry)
-
+        mfe, mae = _pct(max_price, entry), _pct(min_price, entry)
         trailing = float(trade["trailing_stop"] or trade["stop_loss"] or 0)
         tp1_hit = int(trade["tp1_hit"] or 0)
         tp2_hit = int(trade["tp2_hit"] or 0)
+        tp3_hit = int(trade.get("tp3_hit") or 0)
+        stop_breached = int(trade.get("stop_breached") or 0)
+        stop_breached_at = trade.get("stop_breached_at")
+        stop_breach_price = trade.get("stop_breach_price")
 
-        # Profit milestones tighten risk rather than declaring a fake +1% "success".
-        if not tp1_hit and trade["tp1"] is not None and price >= float(trade["tp1"]):
-            tp1_hit = 1
-            trailing = max(trailing, entry)
-            events.append({
-                "type": "TP1",
-                "symbol": symbol,
-                "scope": trade["scope"],
-                "algorithm": trade["algorithm"],
-                "entry": entry,
-                "price": price,
-                "gain_pct": _pct(price, entry),
-            })
+        try:
+            tracking_path = json.loads(trade.get("tracking_path_json") or "[]")
+        except Exception:
+            tracking_path = []
+        today = now.date().isoformat()
+        if trade["scope"] == "POSITION":
+            daily = next((item for item in tracking_path if item.get("date") == today), None)
+            if daily is None:
+                daily = {"date": today, "first": price, "last": price, "high": price, "low": price}
+                tracking_path.append(daily)
+            daily["last"] = price
+            daily["high"] = max(float(daily.get("high") or price), price)
+            daily["low"] = min(float(daily.get("low") or price), price)
+            daily["return_pct"] = _pct(price, entry)
+            tracking_path = sorted(tracking_path, key=lambda item: item.get("date", ""))[-10:]
+        tracking_days = [item.get("date") for item in tracking_path if item.get("date")]
+        tracking_day_count = len(set(tracking_days))
 
-        if not tp2_hit and trade["tp2"] is not None and price >= float(trade["tp2"]):
-            tp2_hit = 1
-            if trade["tp1"] is not None:
-                trailing = max(trailing, float(trade["tp1"]))
+        for field, event_type in (("tp1", "TP1"), ("tp2", "TP2"), ("tp3", "TP3")):
+            hit = {"tp1": tp1_hit, "tp2": tp2_hit, "tp3": tp3_hit}[field]
+            target = trade.get(field)
+            if not hit and target is not None and price >= float(target):
+                if field == "tp1":
+                    tp1_hit, trailing = 1, max(trailing, entry)
+                elif field == "tp2":
+                    tp2_hit = 1
+                    if trade["tp1"] is not None:
+                        trailing = max(trailing, float(trade["tp1"]))
+                else:
+                    tp3_hit = 1
+                events.append({
+                    "type": event_type, "symbol": symbol, "scope": trade["scope"],
+                    "algorithm": trade["algorithm"], "entry": entry, "price": price,
+                    "gain_pct": _pct(price, entry),
+                })
+
+        original_stop = float(trade["stop_loss"] or 0)
+        if trade["scope"] == "POSITION" and not stop_breached and original_stop and price <= original_stop:
+            stop_breached = 1
+            stop_breached_at, stop_breach_price = now.isoformat(), price
             events.append({
-                "type": "TP2",
-                "symbol": symbol,
-                "scope": trade["scope"],
-                "algorithm": trade["algorithm"],
-                "entry": entry,
-                "price": price,
+                "type": "STOP_BREACH", "symbol": symbol, "scope": trade["scope"],
+                "algorithm": trade["algorithm"], "entry": entry, "price": price,
                 "gain_pct": _pct(price, entry),
             })
 
         exit_reason = None
         exit_price = None
-
-        if trailing and price <= trailing:
-            exit_reason = "TRAILING_STOP" if tp1_hit else "STOP"
-            exit_price = price
+        if trade["scope"] == "POSITION":
+            if tracking_day_count >= 10:
+                exit_reason, exit_price = "TRACKING_10D_COMPLETE", price
+        elif trailing and price <= trailing:
+            exit_reason, exit_price = ("TRAILING_STOP" if tp1_hit else "STOP"), price
         elif trade["tp3"] is not None and price >= float(trade["tp3"]):
-            exit_reason = "TP3"
-            exit_price = price
+            exit_reason, exit_price = "TP3", price
         else:
             try:
                 expires_at = datetime.fromisoformat(trade["expires_at"])
                 if expires_at.tzinfo is None:
                     expires_at = expires_at.replace(tzinfo=TR_TZ)
                 if now >= expires_at:
-                    exit_reason = "TIME_EXIT"
-                    exit_price = price
+                    exit_reason, exit_price = "TIME_EXIT", price
             except Exception:
                 pass
 
+        common = (
+            trailing, tp1_hit, tp2_hit, tp3_hit, max_price, min_price, mfe, mae,
+            json.dumps(tracking_days), json.dumps(tracking_path), tracking_day_count,
+            stop_breached, stop_breached_at, stop_breach_price,
+        )
         if exit_reason:
             result_pct = _pct(exit_price, entry)
-            signal_meta = {}
             try:
                 signal_meta = json.loads(trade.get("metadata_json") or "{}")
             except Exception:
@@ -355,60 +434,32 @@ def update_open_trades(symbol, price):
             modeled_exit = exit_execution["fill_price"]
             net_result = net_result_pct(modeled_entry, modeled_exit)
             cur.execute("""
-            UPDATE paper_trades
-            SET status = 'CLOSED',
-                trailing_stop = ?,
-                tp1_hit = ?,
-                tp2_hit = ?,
-                max_price = ?,
-                min_price = ?,
-                mfe_pct = ?,
-                mae_pct = ?,
-                exit_price = ?,
-                result_pct = ?,
-                exit_reason = ?,
-                closed_at = ?,
-                estimated_exit_cost_bps = ?,
-                modeled_exit_price = ?,
-                gross_result_pct = ?,
-                net_result_pct = ?
-            WHERE id = ?
-            """, (
-                trailing, tp1_hit, tp2_hit, max_price, min_price, mfe, mae,
+            UPDATE paper_trades SET status='CLOSED', trailing_stop=?, tp1_hit=?,
+                tp2_hit=?, tp3_hit=?, max_price=?, min_price=?, mfe_pct=?, mae_pct=?,
+                tracking_days_json=?, tracking_path_json=?, tracking_day_count=?,
+                stop_breached=?, stop_breached_at=?, stop_breach_price=?,
+                exit_price=?, result_pct=?, exit_reason=?, closed_at=?,
+                estimated_exit_cost_bps=?, modeled_exit_price=?, gross_result_pct=?,
+                net_result_pct=? WHERE id=?
+            """, common + (
                 exit_price, result_pct, exit_reason, now.isoformat(),
-                exit_execution["cost_bps"], modeled_exit, result_pct,
-                net_result, trade["id"]
+                exit_execution["cost_bps"], modeled_exit, result_pct, net_result, trade["id"],
             ))
-
             events.append({
-                "type": "CLOSE",
-                "reason": exit_reason,
-                "symbol": symbol,
-                "scope": trade["scope"],
-                "algorithm": trade["algorithm"],
-                "entry": entry,
-                "price": exit_price,
-                "gain_pct": net_result,
-                "gross_gain_pct": result_pct,
-                "modeled_exit_price": modeled_exit,
+                "type": "CLOSE", "reason": exit_reason, "symbol": symbol,
+                "scope": trade["scope"], "algorithm": trade["algorithm"],
+                "entry": entry, "price": exit_price, "gain_pct": net_result,
+                "gross_gain_pct": result_pct, "modeled_exit_price": modeled_exit,
                 "execution_model_version": exit_execution["model_version"],
-                "mfe_pct": mfe,
-                "mae_pct": mae,
+                "mfe_pct": mfe, "mae_pct": mae,
             })
         else:
             cur.execute("""
-            UPDATE paper_trades
-            SET trailing_stop = ?,
-                tp1_hit = ?,
-                tp2_hit = ?,
-                max_price = ?,
-                min_price = ?,
-                mfe_pct = ?,
-                mae_pct = ?
-            WHERE id = ?
-            """, (
-                trailing, tp1_hit, tp2_hit, max_price, min_price, mfe, mae, trade["id"]
-            ))
+            UPDATE paper_trades SET trailing_stop=?, tp1_hit=?, tp2_hit=?, tp3_hit=?,
+                max_price=?, min_price=?, mfe_pct=?, mae_pct=?, tracking_days_json=?,
+                tracking_path_json=?, tracking_day_count=?, stop_breached=?,
+                stop_breached_at=?, stop_breach_price=? WHERE id=?
+            """, common + (trade["id"],))
 
     conn.commit()
     conn.close()

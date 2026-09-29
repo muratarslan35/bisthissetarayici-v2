@@ -25,6 +25,9 @@ class TelegramMarketVerifierTests(unittest.TestCase):
             depth_response_at TEXT, depth_response_text TEXT,
             depth_parsed_json TEXT, depth_error TEXT,
             UNIQUE(trade_date, symbol))""")
+        conn.execute("""CREATE TABLE external_market_runtime (
+            source TEXT PRIMARY KEY, cooldown_until TEXT, cooldown_reason TEXT,
+            updated_at TEXT NOT NULL)""")
         conn.commit()
         conn.close()
 
@@ -82,8 +85,29 @@ class TelegramMarketVerifierTests(unittest.TestCase):
         self.assertTrue(parsed["confirmation"])
 
     def test_request_gap_is_rate_safe(self):
-        self.assertGreaterEqual(verifier.REQUEST_GAP_SECONDS, 5)
-        self.assertLessEqual(verifier.REQUEST_GAP_SECONDS, 30)
+        self.assertGreaterEqual(verifier.REQUEST_GAP_SECONDS, 60)
+        self.assertLessEqual(verifier.REQUEST_GAP_SECONDS, 300)
+
+    def test_source_ban_persists_and_prevents_new_claims(self):
+        now = datetime(2026, 9, 28, 10, 30, tzinfo=ZoneInfo("Europe/Istanbul"))
+        with patch.object(verifier, "get_connection", self.connection), \
+             patch.object(verifier, "_now", return_value=now):
+            verifier.reserve_daytime_depth({"symbol": "THYAO.IS"}, now)
+            status = verifier.set_source_cooldown(reason="48 saat ban", now=now)
+            self.assertTrue(status["active"])
+            self.assertTrue(verifier.cooldown_status(now)["active"])
+            self.assertIsNone(verifier._claim_pending())
+            conn = self.connection()
+            row = conn.execute(
+                "SELECT depth_status FROM external_market_verifications"
+            ).fetchone()
+            conn.close()
+            self.assertEqual(row[0], "SKIPPED_COOLDOWN")
+
+    def test_ban_message_detection(self):
+        self.assertIsNotNone(
+            verifier._source_ban_reason("Çok fazla sorgu. 48 saat bekleyin")
+        )
 
     def test_parser_confirms_numerical_theoretical_evidence(self):
         parsed = verifier.parse_response(

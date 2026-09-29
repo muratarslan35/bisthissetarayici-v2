@@ -15,7 +15,7 @@ import json
 import os
 import re
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from database import get_connection
@@ -32,11 +32,96 @@ THEORETICAL_COMMAND = os.getenv("EXTERNAL_VERIFY_THEORETICAL_COMMAND", "/teorik 
 DEPTH_COMMAND = os.getenv("EXTERNAL_VERIFY_DEPTH_COMMAND", "/derinlik {symbol}")
 RESPONSE_TIMEOUT = min(45, max(5, int(os.getenv("EXTERNAL_VERIFY_TIMEOUT", "20"))))
 REQUEST_GAP_SECONDS = min(
-    30, max(5, int(os.getenv("EXTERNAL_VERIFY_REQUEST_GAP_SECONDS", "10")))
+    300, max(60, int(os.getenv("EXTERNAL_VERIFY_REQUEST_GAP_SECONDS", "60")))
 )
+SOURCE_BAN_HOURS = max(48, int(os.getenv("EXTERNAL_VERIFY_BAN_HOURS", "48")))
 
 _worker_started = False
 _worker_lock = threading.Lock()
+
+
+def _ensure_runtime_table(conn):
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS external_market_runtime (
+        source TEXT PRIMARY KEY,
+        cooldown_until TEXT,
+        cooldown_reason TEXT,
+        updated_at TEXT NOT NULL
+    )
+    """)
+
+
+def cooldown_status(now=None):
+    """Return the persisted source cooldown; it survives service restarts."""
+    now = now or _now()
+    conn = get_connection()
+    try:
+        _ensure_runtime_table(conn)
+        row = conn.execute(
+            "SELECT * FROM external_market_runtime WHERE source=?", (SOURCE,)
+        ).fetchone()
+        if not row:
+            return {"active": False, "until": None, "reason": None}
+        result = dict(row)
+        try:
+            until = datetime.fromisoformat(result.get("cooldown_until") or "")
+            if until.tzinfo is None:
+                until = until.replace(tzinfo=TR_TZ)
+            active = until > now
+        except Exception:
+            active = False
+        return {
+            "active": active,
+            "until": result.get("cooldown_until"),
+            "reason": result.get("cooldown_reason"),
+        }
+    finally:
+        conn.close()
+
+
+def set_source_cooldown(hours=SOURCE_BAN_HOURS, reason="source_rate_limit", now=None):
+    """Persist a no-query window and cancel stale queued commands."""
+    now = now or _now()
+    until = now + timedelta(hours=max(SOURCE_BAN_HOURS, int(hours)))
+    conn = get_connection()
+    try:
+        _ensure_runtime_table(conn)
+        conn.execute(
+            """INSERT INTO external_market_runtime
+               (source, cooldown_until, cooldown_reason, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(source) DO UPDATE SET
+                 cooldown_until=excluded.cooldown_until,
+                 cooldown_reason=excluded.cooldown_reason,
+                 updated_at=excluded.updated_at""",
+            (SOURCE, until.isoformat(), str(reason)[:500], now.isoformat()),
+        )
+        conn.execute(
+            """UPDATE external_market_verifications
+               SET status='SKIPPED_COOLDOWN', error=?
+               WHERE source=? AND status IN ('PENDING', 'SENDING')""",
+            (str(reason)[:500], SOURCE),
+        )
+        conn.execute(
+            """UPDATE external_market_verifications
+               SET depth_status='SKIPPED_COOLDOWN', depth_error=?
+               WHERE source=? AND depth_status IN ('PENDING', 'SENDING')""",
+            (str(reason)[:500], SOURCE),
+        )
+        conn.commit()
+        return {"active": True, "until": until.isoformat(), "reason": reason}
+    finally:
+        conn.close()
+
+
+def _source_ban_reason(text):
+    raw = str(text or "").strip().lower()
+    indicators = (
+        "48 saat", "çok fazla sorgu", "cok fazla sorgu", "çok fazla istek",
+        "cok fazla istek", "geçici olarak engel", "gecici olarak engel",
+        "rate limit", "flood wait", "floodwait", "peer flood", "banland",
+    )
+    return next((item for item in indicators if item in raw), None)
 
 
 def _now():
@@ -178,6 +263,7 @@ def quota_status(now=None):
             "depth_queries": depth, "total_queries": theoretical + depth,
             "maximum_total_queries": DAILY_HARD_LIMIT,
             "remaining_queries": max(0, DAILY_HARD_LIMIT - theoretical - depth),
+            "cooldown": cooldown_status(now),
         }
     finally:
         conn.close()
@@ -401,6 +487,8 @@ def reserve_daytime_depth(signal, now=None):
 
 
 def _claim_pending():
+    if cooldown_status().get("active"):
+        return None
     conn = get_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -505,6 +593,14 @@ def _worker():
         try:
             payload = asyncio.run(_send_one(row))
             text = payload.get("text") or ""
+            ban_reason = _source_ban_reason(text)
+            if ban_reason:
+                _finish(
+                    row["id"], row["query_kind"], "RATE_LIMITED",
+                    response_text=text, error=f"source ban detected: {ban_reason}",
+                )
+                set_source_cooldown(reason=f"source response: {ban_reason}")
+                continue
             if row["query_kind"] == "depth":
                 image_bytes = payload.get("image")
                 if image_bytes:
@@ -520,6 +616,8 @@ def _worker():
         except Exception as exc:
             # No automatic retry: each stage is allowed exactly one outbound request.
             _finish(row["id"], row["query_kind"], "FAILED", error=str(exc)[:500])
+            if _source_ban_reason(str(exc)):
+                set_source_cooldown(reason=f"Telegram error: {str(exc)[:300]}")
         finally:
             # The source bot may withhold responses when several commands arrive
             # back-to-back. Keep every request strictly sequential and leave a
@@ -548,6 +646,9 @@ def gate_signal(signal):
     if not ENABLED or not eligible(signal):
         return signal
     now = _now()
+    if cooldown_status(now).get("active"):
+        # The BIST engine remains independent and receives no bot-support label.
+        return signal
     result = get_result(signal.get("symbol"))
     if not result and now.hour < 10:
         result, _ = reserve(signal, now)

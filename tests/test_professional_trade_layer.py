@@ -1,7 +1,9 @@
+import json
 import os
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime
 from unittest.mock import patch
 
 import trade_ledger
@@ -124,14 +126,47 @@ class LedgerMigrationTests(unittest.TestCase):
         self.assertIsNotNone(row["execution_model_version"])
 
         events = trade_ledger.update_open_trades("TEST.IS", 121.0)
+        self.assertFalse([event for event in events if event.get("type") == "CLOSE"])
+        conn = trade_ledger.get_connection()
+        days = [f"2026-09-{day:02d}" for day in range(1, 10)]
+        path = [
+            {"date": day, "first": 100, "last": 100, "high": 100, "low": 100}
+            for day in days
+        ]
+        conn.execute(
+            "UPDATE paper_trades SET tracking_days_json=?, tracking_path_json=?, tracking_day_count=9",
+            (json.dumps(days), json.dumps(path)),
+        )
+        conn.commit()
+        conn.close()
+        tenth_day = datetime(2026, 9, 10, 12, 0, tzinfo=trade_ledger.TR_TZ)
+        with patch.object(trade_ledger, "_now", return_value=tenth_day):
+            events = trade_ledger.update_open_trades("TEST.IS", 121.0)
         close = [event for event in events if event.get("type") == "CLOSE"]
-        self.assertEqual(len(close), 1)
+        self.assertEqual(close[0]["reason"], "TRACKING_10D_COMPLETE")
         self.assertLess(close[0]["gain_pct"], close[0]["gross_gain_pct"])
 
         dashboard_store.init_dashboard_store()
         payload = dashboard_store.get_dashboard_data()
         self.assertIn("validation", payload)
         self.assertTrue(payload["validation"]["uses_net_execution_results"])
+
+    def test_position_stop_breach_is_recorded_without_closing_tracking(self):
+        signal = {
+            "symbol": "LIMIT.IS", "signal_scope": "POSITION",
+            "main_algorithm": "TREND_START_V3", "score": 92,
+            "entry_price": 100.0, "stop_loss": 95.0,
+            "tp1": 106.0, "tp2": 112.0, "tp3": 120.0,
+        }
+        self.assertTrue(trade_ledger.record_signal(signal))
+        events = trade_ledger.update_open_trades("LIMIT.IS", 90.0)
+        self.assertTrue(any(event["type"] == "STOP_BREACH" for event in events))
+        self.assertFalse(any(event["type"] == "CLOSE" for event in events))
+        conn = trade_ledger.get_connection()
+        row = conn.execute("SELECT status, stop_breached FROM paper_trades").fetchone()
+        conn.close()
+        self.assertEqual(row["status"], "OPEN")
+        self.assertEqual(row["stop_breached"], 1)
 
 
 if __name__ == "__main__":
