@@ -57,7 +57,21 @@ def eligible(signal, now=None):
     stop = signal.get("stop_loss")
     target = signal.get("tp1")
     risk_pct = float(signal.get("risk_pct") or 999)
-    confidence = float(signal.get("data_confidence") or 0)
+    # Position setups are built from daily/4H/1H structure; an incomplete or
+    # delayed 15m bar must not silently prevent external verification. Intraday
+    # setups, on the other hand, must retain the stricter live-data confidence.
+    if scope == "POSITION":
+        confidence = float(
+            signal.get("structural_data_confidence")
+            or signal.get("data_confidence")
+            or 0
+        )
+    else:
+        confidence = float(
+            signal.get("intraday_data_confidence")
+            or signal.get("data_confidence")
+            or 0
+        )
     rs_percentile = float(signal.get("relative_strength_percentile") or 0)
     if not entry or not stop or not target or confidence < 70 or rs_percentile < 82:
         return False
@@ -94,10 +108,7 @@ def reserve(signal, now=None):
         if existing:
             conn.commit()
             return dict(existing), False
-        used = conn.execute(
-            "SELECT COUNT(*) FROM external_market_verifications WHERE trade_date=?",
-            (trade_date,),
-        ).fetchone()[0]
+        used = _query_count(conn, trade_date)
         if used >= DAILY_HARD_LIMIT:
             conn.commit()
             return None, False
@@ -150,7 +161,7 @@ def quota_status(now=None):
         ).fetchone()[0]
         theoretical = conn.execute(
             """SELECT COUNT(*) FROM external_market_verifications
-               WHERE trade_date=? AND status IS NOT NULL""",
+               WHERE trade_date=? AND status NOT IN ('NOT_REQUESTED')""",
             (now.date().isoformat(),),
         ).fetchone()[0]
         depth = conn.execute(
@@ -161,8 +172,9 @@ def quota_status(now=None):
         return {
             "date": now.date().isoformat(), "symbols": used,
             "symbol_limit": DAILY_HARD_LIMIT, "theoretical_queries": theoretical,
-            "depth_queries": depth, "maximum_total_queries": DAILY_HARD_LIMIT * 2,
-            "maximum_telegram_actions": DAILY_HARD_LIMIT * 3,
+            "depth_queries": depth, "total_queries": theoretical + depth,
+            "maximum_total_queries": DAILY_HARD_LIMIT,
+            "remaining_queries": max(0, DAILY_HARD_LIMIT - theoretical - depth),
         }
     finally:
         conn.close()
@@ -236,6 +248,68 @@ def _theoretical_supports(signal, parsed):
     return bool(price and quantity > 0 and entry and price >= entry * 0.995 and side != "SELL")
 
 
+def _query_count(conn, trade_date):
+    """Count outbound bot commands, including pending/failed attempts.
+
+    The hard limit applies to Telegram requests, not merely unique symbols.
+    A timeout or failed request still consumes quota and is never retried.
+    """
+    row = conn.execute(
+        """SELECT
+               SUM(CASE WHEN status NOT IN ('NOT_REQUESTED') THEN 1 ELSE 0 END),
+               SUM(CASE WHEN depth_status IS NOT NULL THEN 1 ELSE 0 END)
+           FROM external_market_verifications WHERE trade_date=?""",
+        (trade_date,),
+    ).fetchone()
+    return int((row[0] or 0) + (row[1] or 0))
+
+
+def _depth_analysis(signal, parsed):
+    """Return conservative, auditable order-book confirmation metrics."""
+    totals = parsed.get("depth_totals") or {}
+    header = parsed.get("header") or {}
+    quality = parsed.get("quality") or {}
+    buy_qty = float(totals.get("buy_quantity") or parsed.get("buy_total") or 0)
+    sell_qty = float(totals.get("sell_quantity") or parsed.get("sell_total") or 0)
+    ratio = totals.get("buy_sell_ratio")
+    if ratio is None:
+        ratio = parsed.get("buy_sell_ratio")
+    ratio = float(ratio or 0)
+    book_total = buy_qty + sell_qty
+    pressure_pct = ((buy_qty - sell_qty) / book_total * 100.0) if book_total else None
+    market_volume = int(header.get("volume") or parsed.get("volume") or 0)
+    depth_price = float(header.get("last_price") or 0)
+    signal_price = float(signal.get("current_price") or signal.get("entry_price") or 0)
+    price_gap_pct = (
+        abs(depth_price - signal_price) / signal_price * 100.0
+        if depth_price and signal_price else None
+    )
+    complete = bool(quality.get("complete", parsed.get("confirmation")))
+    confirmed = bool(
+        complete
+        and market_volume > 0
+        and buy_qty > 0
+        and sell_qty > 0
+        and ratio >= 1.20
+        and pressure_pct is not None
+        and pressure_pct >= 9.0
+        and (price_gap_pct is None or price_gap_pct <= 2.0)
+    )
+    return {
+        "confirmed": confirmed,
+        "buy_quantity": int(buy_qty),
+        "sell_quantity": int(sell_qty),
+        "book_total_quantity": int(book_total),
+        "buy_sell_ratio": round(ratio, 3),
+        "buy_pressure_pct": round(pressure_pct, 1) if pressure_pct is not None else None,
+        "market_volume": market_volume,
+        "depth_price": depth_price or None,
+        "price_gap_pct": round(price_gap_pct, 2) if price_gap_pct is not None else None,
+        "valid_depth_levels": quality.get("valid_depth_levels"),
+        "trade_rows": quality.get("trade_rows"),
+    }
+
+
 def reserve_depth(symbol, now=None):
     """Reserve the sole conditional depth query for an existing pool symbol."""
     now = now or _now()
@@ -255,6 +329,9 @@ def reserve_depth(symbol, now=None):
         if row["depth_status"]:
             conn.commit()
             return dict(row), False
+        if _query_count(conn, now.date().isoformat()) >= DAILY_HARD_LIMIT:
+            conn.commit()
+            return dict(row), False
         conn.execute(
             """UPDATE external_market_verifications
                SET depth_status='PENDING', depth_requested_at=? WHERE id=?""",
@@ -265,6 +342,54 @@ def reserve_depth(symbol, now=None):
         ).fetchone()
         conn.commit()
         return dict(updated), True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def reserve_daytime_depth(signal, now=None):
+    """Admit a new strong daytime signal directly to depth verification.
+
+    This is intentionally separate from the opening theoretical path. It uses
+    one remaining daily request and never sends a retroactive /teorik command.
+    """
+    now = now or _now()
+    minute = now.hour * 60 + now.minute
+    if now.weekday() >= 5 or not (10 * 60 <= minute < 18 * 60):
+        return None, False
+    trade_date = now.date().isoformat()
+    symbol = _symbol(signal.get("symbol"))
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT * FROM external_market_verifications WHERE trade_date=? AND symbol=?",
+            (trade_date, symbol),
+        ).fetchone()
+        if existing:
+            conn.commit()
+            return dict(existing), False
+        if _query_count(conn, trade_date) >= DAILY_HARD_LIMIT:
+            conn.commit()
+            return None, False
+        cur = conn.execute(
+            """INSERT INTO external_market_verifications
+               (trade_date, symbol, source, command, status, requested_at,
+                depth_command, depth_status, depth_requested_at)
+               VALUES (?, ?, ?, ?, 'NOT_REQUESTED', ?, ?, 'PENDING', ?)""",
+            (
+                trade_date, symbol, SOURCE,
+                THEORETICAL_COMMAND.format(symbol=symbol), now.isoformat(),
+                DEPTH_COMMAND.format(symbol=symbol), now.isoformat(),
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM external_market_verifications WHERE id=?", (cur.lastrowid,)
+        ).fetchone()
+        conn.commit()
+        return dict(row), True
     except Exception:
         conn.rollback()
         raise
@@ -418,6 +543,8 @@ def gate_signal(signal):
     result = get_result(signal.get("symbol"))
     if not result and now.hour < 10:
         result, _ = reserve(signal, now)
+    elif not result:
+        result, _ = reserve_daytime_depth(signal, now)
     if not result:
         # Not in the ten-symbol bot pool: this remains a pure system signal.
         return signal
@@ -443,15 +570,19 @@ def gate_signal(signal):
     if depth_status in {"PENDING", "SENDING"}:
         return None
     depth = (get_result(signal.get("symbol"), now) or {}).get("depth_parsed") or {}
-    if depth_status == "DATA_READY" and depth.get("confirmation"):
-        ratio = depth.get("buy_sell_ratio")
-        if ratio is None:
-            ratio = (depth.get("depth_totals") or {}).get("buy_sell_ratio")
+    analysis = _depth_analysis(signal, depth) if depth_status == "DATA_READY" else {}
+    if depth_status == "DATA_READY" and analysis.get("confirmed"):
         signal["bot_support"] = {
             "source": "@borsabilgibot", "evidence": "DERINLIK",
-            "buy_sell_ratio": ratio,
+            **analysis,
         }
-        signal.setdefault("reasons", []).insert(0, "Bot destekli: derinlik teyidi")
+        signal.setdefault("reasons", []).insert(
+            0,
+            "Bot destekli: derinlik teyidi "
+            f"(A/S {analysis['buy_sell_ratio']:.2f} · "
+            f"alış baskısı %{analysis['buy_pressure_pct']:.1f} · "
+            f"hacim {analysis['market_volume']:,})",
+        )
         return signal
     # Bot did not contribute usable evidence. Publish as a normal system signal
     # and deliberately omit every bot-related field/message.
