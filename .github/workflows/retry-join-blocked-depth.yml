@@ -1,0 +1,36 @@
+name: Retry Join-Blocked Depth Once
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.BIST_DEPLOY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+
+      - name: Requeue existing failed depth requests once
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/key \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            ubuntu@89.168.99.141 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          cd /home/ubuntu/bistbot
+          echo "=== BEFORE ==="
+          venv/bin/python scripts/requeue_join_blocked_depth.py
+          echo "=== APPLY ONCE ==="
+          venv/bin/python scripts/requeue_join_blocked_depth.py --apply
+          echo "Existing rows were reused; daily quota row count is unchanged."
+          REMOTE
