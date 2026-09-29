@@ -501,6 +501,8 @@ def _base_signal(item, scope, algo, score, reasons, ctx, rs_pct, risk):
         "rsi_4h": rsi_4h,
         "rsi_1d": rsi_1d,
         "data_confidence": item.get("data_confidence"),
+        "intraday_data_confidence": item.get("intraday_data_confidence"),
+        "structural_data_confidence": item.get("structural_data_confidence"),
         "data_age_minutes": item.get("data_age_minutes"),
         "data_source": item.get("data_source"),
         "avg_daily_turnover_tl": round(avg_turnover, 2) if avg_turnover else None,
@@ -1283,7 +1285,14 @@ def format_v3_signal_message(signal):
         )
     elif bot_support.get("evidence") == "DERINLIK":
         ratio = bot_support.get("buy_sell_ratio")
-        lines.append(f"🤖 <b>BOT DESTEKLİ TEYİT</b> · Derinlik alış/satış {ratio}x")
+        pressure = bot_support.get("buy_pressure_pct")
+        volume = bot_support.get("market_volume")
+        detail = f"Derinlik A/S {ratio}x"
+        if pressure is not None:
+            detail += f" · Alış baskısı %{pressure}"
+        if volume:
+            detail += f" · Hacim {int(volume):,}".replace(",", ".")
+        lines.append(f"🤖 <b>BOT DESTEKLİ TEYİT</b> · {detail}")
 
     if scope == "POSITION":
         lines.append("⏱ <b>Takip:</b> 2–10 işlem günü")
