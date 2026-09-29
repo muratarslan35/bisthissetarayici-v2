@@ -566,7 +566,7 @@ function regimeLabel(v){
   return {RISK_ON:"Pozitif",RISK_OFF:"Temkinli",NEUTRAL:"Dengeli",UNKNOWN:"Belirsiz"}[v]||v||"Belirsiz";
 }
 function exitLabel(v){
-  return {STOP:"Koruyucu stop",TRAILING_STOP:"İz süren stop",TP3:"Ana hedef",TIME_EXIT:"Süre doldu"}[v]||v||"-";
+  return {STOP:"Koruyucu stop",TRAILING_STOP:"İz süren stop",TP3:"Ana hedef",TIME_EXIT:"Süre doldu",TRACKING_10D_COMPLETE:"10 günlük izleme tamamlandı"}[v]||v||"-";
 }
 function timeShort(v){
   if(!v)return "-";
@@ -640,6 +640,9 @@ function signalCard(s,scope){
       ${!isIntra&&s.rsi_1d!=null?`<span class="chip">RSI günlük ${n(s.rsi_1d)}</span>`:""}
       ${s.tp1_hit?`<span class="chip green">1. hedef görüldü</span>`:""}
       ${s.tp2_hit?`<span class="chip green">2. hedef görüldü</span>`:""}
+      ${s.tp3_hit?`<span class="chip green">Ana hedef görüldü</span>`:""}
+      ${!isIntra?`<span class="chip">Takip ${esc(s.tracking_day_count||0)}/10 işlem günü</span>`:""}
+      ${!isIntra&&s.stop_breached?`<span class="chip amber">Stop görüldü · izleme sürüyor</span>`:""}
       <span class="chip">${esc(regimeLabel(s.market_regime))}</span>
       <span class="chip ${dataConf>=80?"green":"amber"}">Veri güveni ${n(dataConf,0)}/100</span>
     </div>
