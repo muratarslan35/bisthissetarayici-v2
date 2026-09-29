@@ -125,6 +125,21 @@ jobs:
           echo "=== INSTALL DEDICATED SERVICES ==="
           bash deploy/install_dedicated_vm_services.sh /home/ubuntu/bistbot
 
+          echo "=== ONE-TIME SOURCE COOLDOWN ==="
+          cooldown_marker="data/telegram-source-cooldown-20260929"
+          if [ ! -f "$cooldown_marker" ]; then
+            mkdir -p data
+            venv/bin/python - <<'PY'
+          from telegram_market_verifier import set_source_cooldown
+          print("SOURCE_COOLDOWN=" + str(set_source_cooldown(
+              hours=48, reason="User-reported 48-hour source ban on 2026-09-29"
+          )))
+          PY
+            touch "$cooldown_marker"
+          else
+            echo "SOURCE_COOLDOWN=ALREADY_APPLIED"
+          fi
+
           healthy=0
           for i in $(seq 1 30); do
             web=$(sudo systemctl is-active bist-trading-web.service || true)
