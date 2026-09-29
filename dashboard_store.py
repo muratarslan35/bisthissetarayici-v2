@@ -222,6 +222,7 @@ def _signal_rows(cur, scope, limit=80):
         p.trailing_stop,
         p.tp1_hit,
         p.tp2_hit,
+        p.tp3_hit,
         p.max_price,
         p.min_price,
         p.mfe_pct,
@@ -236,6 +237,11 @@ def _signal_rows(cur, scope, limit=80):
         p.opened_at,
         p.expires_at,
         p.closed_at,
+        p.tracking_day_count,
+        p.tracking_path_json,
+        p.stop_breached,
+        p.stop_breached_at,
+        p.stop_breach_price,
         mp.price AS current_price,
         mp.data_confidence,
         mp.data_age_minutes,
@@ -273,6 +279,11 @@ def _signal_rows(cur, scope, limit=80):
         d["market_structure_phase"] = metadata.get("market_structure_phase")
         d["technical_confirmations"] = metadata.get("technical_confirmations", [])
         d["technical_warnings"] = metadata.get("technical_warnings", [])
+        try:
+            d["tracking_path"] = json.loads(d.pop("tracking_path_json") or "[]")
+        except Exception:
+            d["tracking_path"] = []
+        d["tracking_days_remaining"] = max(0, 10 - int(d.get("tracking_day_count") or 0))
 
         current = d.get("current_price")
         # UI live move remains the transparent quote-to-quote change.  The
