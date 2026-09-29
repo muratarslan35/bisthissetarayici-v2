@@ -51,7 +51,8 @@ class TelegramMarketVerifierTests(unittest.TestCase):
             self.assertIsNone(row)
             self.assertFalse(created)
             self.assertEqual(verifier.quota_status(now)["symbols"], 10)
-            self.assertEqual(verifier.quota_status(now)["maximum_total_queries"], 20)
+            self.assertEqual(verifier.quota_status(now)["maximum_total_queries"], 10)
+            self.assertEqual(verifier.quota_status(now)["remaining_queries"], 0)
 
     def test_parser_never_confirms_menu_only_response(self):
         parsed = verifier.parse_response("Canlı derinlik\nDerinlik görüntü al\nLink yenile")
@@ -100,6 +101,70 @@ class TelegramMarketVerifierTests(unittest.TestCase):
         not_ready = dict(ready, session_rvol=0.8)
         self.assertFalse(verifier.eligible(not_ready, now))
 
+    def test_position_eligibility_uses_structural_confidence(self):
+        now = datetime(2026, 9, 28, 10, 15, tzinfo=ZoneInfo("Europe/Istanbul"))
+        ready = {
+            "symbol": "THYAO.IS", "score": 98, "signal_scope": "POSITION",
+            "entry_price": 300, "stop_loss": 282, "tp1": 325,
+            "risk_pct": 6.0, "data_confidence": 35,
+            "structural_data_confidence": 92,
+            "relative_strength_percentile": 93,
+        }
+        self.assertTrue(verifier.eligible(ready, now))
+        self.assertFalse(verifier.eligible(dict(ready, structural_data_confidence=60), now))
+
+    def test_new_daytime_candidate_reserves_depth_without_theoretical(self):
+        now = datetime(2026, 9, 28, 10, 30, tzinfo=ZoneInfo("Europe/Istanbul"))
+        signal = {"symbol": "THYAO.IS"}
+        with patch.object(verifier, "get_connection", self.connection):
+            row, created = verifier.reserve_daytime_depth(signal, now)
+            self.assertTrue(created)
+            self.assertEqual(row["status"], "NOT_REQUESTED")
+            self.assertEqual(row["depth_status"], "PENDING")
+            quota = verifier.quota_status(now)
+            self.assertEqual(quota["theoretical_queries"], 0)
+            self.assertEqual(quota["depth_queries"], 1)
+            self.assertEqual(quota["total_queries"], 1)
+            self.assertEqual(quota["remaining_queries"], 9)
+
+    def test_total_theoretical_and_depth_requests_never_exceed_ten(self):
+        morning = datetime(2026, 9, 28, 9, 50, tzinfo=ZoneInfo("Europe/Istanbul"))
+        daytime = datetime(2026, 9, 28, 10, 30, tzinfo=ZoneInfo("Europe/Istanbul"))
+        with patch.object(verifier, "get_connection", self.connection):
+            for index in range(6):
+                verifier.reserve({"symbol": f"OPEN{index}.IS"}, morning)
+            for index in range(4):
+                row, created = verifier.reserve_daytime_depth(
+                    {"symbol": f"LIVE{index}.IS"}, daytime
+                )
+                self.assertTrue(created)
+                self.assertEqual(row["depth_status"], "PENDING")
+            row, created = verifier.reserve_daytime_depth(
+                {"symbol": "ELEVEN.IS"}, daytime
+            )
+            self.assertIsNone(row)
+            self.assertFalse(created)
+            self.assertEqual(verifier.quota_status(daytime)["total_queries"], 10)
+
+    def test_depth_analysis_requires_volume_pressure_quality_and_fresh_price(self):
+        signal = {"current_price": 100.0, "entry_price": 99.5}
+        parsed = {
+            "header": {"last_price": 100.5, "volume": 2_500_000},
+            "depth_totals": {
+                "buy_quantity": 1_500_000,
+                "sell_quantity": 750_000,
+                "buy_sell_ratio": 2.0,
+            },
+            "quality": {"complete": True, "valid_depth_levels": 9, "trade_rows": 12},
+        }
+        result = verifier._depth_analysis(signal, parsed)
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(result["market_volume"], 2_500_000)
+        self.assertEqual(result["buy_pressure_pct"], 33.3)
+        self.assertFalse(verifier._depth_analysis(
+            signal, {**parsed, "header": {"last_price": 104.0, "volume": 2_500_000}}
+        )["confirmed"])
+
     def test_non_pool_signal_has_no_bot_label(self):
         now = datetime(2026, 9, 28, 10, 30, tzinfo=ZoneInfo("Europe/Istanbul"))
         signal = {
@@ -110,7 +175,8 @@ class TelegramMarketVerifierTests(unittest.TestCase):
         }
         with patch.object(verifier, "ENABLED", True), \
              patch.object(verifier, "_now", return_value=now), \
-             patch.object(verifier, "get_result", return_value=None):
+             patch.object(verifier, "get_result", return_value=None), \
+             patch.object(verifier, "reserve_daytime_depth", return_value=(None, False)):
             output = verifier.gate_signal(signal)
         self.assertIs(output, signal)
         self.assertNotIn("bot_support", output)
