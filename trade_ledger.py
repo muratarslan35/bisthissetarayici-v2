@@ -617,18 +617,45 @@ def _price_text(value):
 def build_v4_daily_report(scope=None):
     now = _now()
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    position_cutoff = (now - timedelta(days=16)).isoformat()
     conn = get_connection()
     cur = conn.cursor()
     sql = """
-        SELECT symbol, status, entry_price, exit_price, result_pct,
-               net_result_pct, opened_at
+        SELECT symbol, scope, status, entry_price, exit_price, result_pct,
+               net_result_pct, opened_at, closed_at, tracking_day_count,
+               tracking_path_json
         FROM paper_trades
         WHERE policy_version=? AND opened_at>=?
     """
     params = [POLICY_VERSION, start.isoformat()]
-    if scope:
+    if scope == "POSITION":
+        sql = """
+            SELECT symbol, scope, status, entry_price, exit_price, result_pct,
+                   net_result_pct, opened_at, closed_at, tracking_day_count,
+                   tracking_path_json
+            FROM paper_trades
+            WHERE policy_version=? AND scope='POSITION' AND (
+                (status='OPEN' AND opened_at>=?)
+                OR (status='CLOSED' AND closed_at>=?)
+            )
+        """
+        params = [POLICY_VERSION, position_cutoff, start.isoformat()]
+    elif scope:
         sql += " AND scope=?"
         params.append(scope)
+    else:
+        sql = """
+            SELECT symbol, scope, status, entry_price, exit_price, result_pct,
+                   net_result_pct, opened_at, closed_at, tracking_day_count,
+                   tracking_path_json
+            FROM paper_trades
+            WHERE policy_version=? AND (
+                opened_at>=?
+                OR (scope='POSITION' AND status='OPEN' AND opened_at>=?)
+                OR (scope='POSITION' AND status='CLOSED' AND closed_at>=?)
+            )
+        """
+        params = [POLICY_VERSION, start.isoformat(), position_cutoff, start.isoformat()]
     sql += " ORDER BY opened_at, id"
     cur.execute(sql, params)
     rows = [dict(row) for row in cur.fetchall()]
@@ -636,21 +663,46 @@ def build_v4_daily_report(scope=None):
     if not rows:
         return None
 
-    success = fail = active = 0
-    lines = ["📊 <b>GÜN SONU RAPORU</b>", ""]
+    success = fail = neutral = active = 0
+    title = (
+        "🤖 BOT POZİSYON TAKİP RAPORU"
+        if scope == "POSITION"
+        else "📣 KANAL GÜN İÇİ RAPORU"
+        if scope == "INTRADAY"
+        else "📊 GÜN SONU RAPORU"
+    )
+    lines = [f"<b>{title}</b>", ""]
     for row in rows:
         symbol = str(row.get("symbol") or "").replace(".IS", "")
         entry = _price_text(row.get("entry_price"))
         if row.get("status") != "CLOSED":
             active += 1
-            lines.append(f"⏳ {symbol} | {entry} → -")
+            current = None
+            try:
+                path = json.loads(row.get("tracking_path_json") or "[]")
+                if path:
+                    current = path[-1].get("last")
+            except Exception:
+                current = None
+            if current and row.get("scope") == "POSITION":
+                move = _pct(float(current), float(row.get("entry_price") or 0))
+                day_count = int(row.get("tracking_day_count") or 0)
+                lines.append(
+                    f"⏳ {symbol} | {entry} → {_price_text(current)} | "
+                    f"{move:+.2f}% | Takip {day_count}/10"
+                )
+            else:
+                lines.append(f"⏳ {symbol} | {entry} → -")
             continue
         result = row.get("net_result_pct")
         if result is None:
             result = row.get("result_pct")
         result = float(result or 0.0)
         exit_price = _price_text(row.get("exit_price"))
-        if result > 0:
+        if abs(result) < 0.005:
+            neutral += 1
+            marker = "➖"
+        elif result > 0:
             success += 1
             marker = "✅"
         else:
@@ -665,6 +717,7 @@ def build_v4_daily_report(scope=None):
         f"Toplam: {total}",
         f"✅ Başarılı: {success}",
         f"❌ Başarısız: {fail}",
+        f"➖ Nötr: {neutral}",
         f"⏳ Açık: {active}",
         "", f"📈 Başarı Oranı: %{success_rate:.1f}",
         "", f"🕒 {now.strftime('%H:%M')}",

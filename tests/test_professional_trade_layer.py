@@ -196,6 +196,30 @@ class LedgerMigrationTests(unittest.TestCase):
         self.assertIn("Toplam: 3", report)
         self.assertIn("Başarı Oranı: %33.3", report)
 
+    def test_position_report_keeps_prior_open_trade_and_tracking_progress(self):
+        opened = datetime(2026, 9, 24, 10, 0, tzinfo=trade_ledger.TR_TZ)
+        report_day = datetime(2026, 10, 1, 18, 8, tzinfo=trade_ledger.TR_TZ)
+        signal = {
+            "symbol": "HOLD.IS", "signal_scope": "POSITION",
+            "main_algorithm": "TREND_START_V3", "score": 96,
+            "entry_price": 100.0, "stop_loss": 94.0,
+            "tp1": 108.0, "tp2": 116.0, "tp3": 125.0,
+        }
+        with patch.object(trade_ledger, "_now", return_value=opened):
+            self.assertTrue(trade_ledger.record_signal(signal))
+        conn = trade_ledger.get_connection()
+        path = [{"date": "2026-10-01", "last": 104.0}]
+        conn.execute(
+            "UPDATE paper_trades SET tracking_path_json=?, tracking_day_count=6",
+            (json.dumps(path),),
+        )
+        conn.commit()
+        conn.close()
+        with patch.object(trade_ledger, "_now", return_value=report_day):
+            report = trade_ledger.build_v4_daily_report(scope="POSITION")
+        self.assertIn("BOT POZİSYON TAKİP RAPORU", report)
+        self.assertIn("⏳ HOLD | 100 → 104 | +4.00% | Takip 6/10", report)
+
 
 if __name__ == "__main__":
     unittest.main()
