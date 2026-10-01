@@ -600,11 +600,28 @@ async def _send_one(row):
             if selected is None:
                 return {"text": response.message or "", "image": None}
             await response.click(*selected)
-            image_message = await conversation.get_response()
-            image_bytes = None
-            if image_message.media:
-                image_bytes = await client.download_media(image_message, file=bytes)
-            return {"text": image_message.message or response.message or "", "image": image_bytes}
+
+            # The source sometimes edits the menu message or posts the image
+            # without producing a Conversation.get_response() event. Polling
+            # recent chat history reads the result without sending another bot
+            # command, so it consumes neither the ten-command quota nor an
+            # additional source-bot request.
+            deadline = asyncio.get_running_loop().time() + RESPONSE_TIMEOUT
+            latest_text = response.message or ""
+            while asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(1.0)
+                messages = await client.get_messages(TARGET, limit=8)
+                for image_message in messages:
+                    if int(getattr(image_message, "id", 0) or 0) < int(response.id or 0):
+                        continue
+                    if getattr(image_message, "message", None):
+                        latest_text = image_message.message
+                    if not getattr(image_message, "media", None):
+                        continue
+                    image_bytes = await client.download_media(image_message, file=bytes)
+                    if image_bytes:
+                        return {"text": latest_text, "image": image_bytes}
+            return {"text": latest_text, "image": None}
 
 
 def _worker():

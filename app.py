@@ -1614,7 +1614,7 @@ def scanner_loop():
                 if last_daily_report != now.date() and now.time() > BIST_CLOSE:
 
                     report = (
-                        build_v4_daily_report()
+                        build_v4_daily_report(scope="POSITION")
                         if TRADING_V3_ENABLED
                         else build_daily_success_report()
                     )
