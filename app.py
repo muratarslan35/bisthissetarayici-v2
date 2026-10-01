@@ -469,6 +469,18 @@ def publish_v5_signal(signal, item):
     signal = external_validation_gate(signal)
     if signal is None:
         return False
+    if signal.get("signal_scope") == "INTRADAY":
+        observed_at = float(signal.get("execution_observed_at") or 0.0)
+        if not observed_at or time.time() - observed_at > 20.0:
+            print(
+                "SIGNAL_PUBLISH_REJECT "
+                f"symbol={signal.get('symbol')} reason=publish_quote_expired",
+                flush=True,
+            )
+            return False
+        signal["publish_latency_seconds"] = round(
+            max(0.0, time.time() - observed_at), 2
+        )
     signal = enrich_routing(signal)
     transition = assess_signal_transition(signal)
     action = transition.get("action")
@@ -1504,7 +1516,8 @@ def fast_lane_loop():
                             )
                         msg = format_trade_event(event)
                         if route_trade_event(event) == TELEGRAM_CHANNEL:
-                            send_to_channel(msg)
+                            if event.get("type") != "CLOSE":
+                                send_to_channel(msg)
                         else:
                             broadcast_signal(msg)
 
@@ -1608,6 +1621,11 @@ def scanner_loop():
 
                     if report:
                         send_report_to_admins(report)
+
+                    if TRADING_V3_ENABLED:
+                        channel_report = build_v4_daily_report(scope="INTRADAY")
+                        if channel_report:
+                            send_to_channel(channel_report)
 
                     if not TRADING_V3_ENABLED:
                         m_report = build_momentum_daily_report()
@@ -1846,7 +1864,8 @@ def scanner_loop():
                             for event in safe_update_open_trades(symbol, price):
                                 event_msg = format_trade_event(event)
                                 if route_trade_event(event) == TELEGRAM_CHANNEL:
-                                    send_to_channel(event_msg)
+                                    if event.get("type") != "CLOSE":
+                                        send_to_channel(event_msg)
                                 else:
                                     broadcast_signal(event_msg)
 

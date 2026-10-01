@@ -367,6 +367,22 @@ def _depth_analysis(signal, parsed):
     book_total = buy_qty + sell_qty
     pressure_pct = ((buy_qty - sell_qty) / book_total * 100.0) if book_total else None
     market_volume = int(header.get("volume") or parsed.get("volume") or 0)
+    institution_flow = list(parsed.get("institution_flow") or [])
+    positive_flows = [
+        row for row in institution_flow if float(row.get("net_quantity") or 0) > 0
+    ]
+    negative_flows = [
+        row for row in institution_flow if float(row.get("net_quantity") or 0) < 0
+    ]
+    institutional_buy_net = sum(float(row.get("net_quantity") or 0) for row in positive_flows)
+    institutional_sell_net = abs(
+        sum(float(row.get("net_quantity") or 0) for row in negative_flows)
+    )
+    top_buyer = positive_flows[0] if positive_flows else {}
+    top_buyer_share_pct = (
+        float(top_buyer.get("net_quantity") or 0) / institutional_buy_net * 100.0
+        if institutional_buy_net else None
+    )
     depth_price = float(header.get("last_price") or 0)
     signal_price = float(signal.get("current_price") or signal.get("entry_price") or 0)
     price_gap_pct = (
@@ -396,6 +412,13 @@ def _depth_analysis(signal, parsed):
         "price_gap_pct": round(price_gap_pct, 2) if price_gap_pct is not None else None,
         "valid_depth_levels": quality.get("valid_depth_levels"),
         "trade_rows": quality.get("trade_rows"),
+        "institutional_buy_net": int(institutional_buy_net),
+        "institutional_sell_net": int(institutional_sell_net),
+        "top_net_buyer": top_buyer.get("institution"),
+        "top_net_buyer_share_pct": (
+            round(top_buyer_share_pct, 1) if top_buyer_share_pct is not None else None
+        ),
+        "institution_flow_rows": len(institution_flow),
     }
 
 
@@ -657,6 +680,7 @@ def gate_signal(signal):
     if not result:
         # Not in the ten-symbol bot pool: this remains a pure system signal.
         return signal
+    non_blocking = str(signal.get("signal_scope") or "").upper() == "INTRADAY"
     status = result.get("status")
     theoretical = result.get("parsed") or {}
     if status == "DATA_READY" and _theoretical_supports(signal, theoretical):
@@ -668,16 +692,18 @@ def gate_signal(signal):
         signal.setdefault("reasons", []).insert(0, "Bot destekli: teorik eşleşme teyidi")
         return signal
     if status in {"PENDING", "SENDING"}:
-        return None
+        # Channel timing is more valuable than a late auxiliary confirmation.
+        # The request may finish in the background, but it cannot hold an entry.
+        return signal if non_blocking else None
     if now.hour < 10:
-        return None
+        return signal if non_blocking else None
 
     depth_status = result.get("depth_status")
     if not depth_status:
         result, _ = reserve_depth(signal.get("symbol"), now)
         depth_status = result.get("depth_status") if result else None
     if depth_status in {"PENDING", "SENDING"}:
-        return None
+        return signal if non_blocking else None
     depth = (get_result(signal.get("symbol"), now) or {}).get("depth_parsed") or {}
     analysis = _depth_analysis(signal, depth) if depth_status == "DATA_READY" else {}
     if depth_status == "DATA_READY" and analysis.get("confirmed"):

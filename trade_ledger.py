@@ -608,10 +608,68 @@ def _period_report(start_at, title):
     return "\n".join(lines)
 
 
-def build_v4_daily_report():
+def _price_text(value):
+    if value is None:
+        return "-"
+    return f"{float(value):.2f}".rstrip("0").rstrip(".")
+
+
+def build_v4_daily_report(scope=None):
     now = _now()
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    return _period_report(start, "GÜNLÜK SEÇİCİ SİNYAL RAPORU")
+    conn = get_connection()
+    cur = conn.cursor()
+    sql = """
+        SELECT symbol, status, entry_price, exit_price, result_pct,
+               net_result_pct, opened_at
+        FROM paper_trades
+        WHERE policy_version=? AND opened_at>=?
+    """
+    params = [POLICY_VERSION, start.isoformat()]
+    if scope:
+        sql += " AND scope=?"
+        params.append(scope)
+    sql += " ORDER BY opened_at, id"
+    cur.execute(sql, params)
+    rows = [dict(row) for row in cur.fetchall()]
+    conn.close()
+    if not rows:
+        return None
+
+    success = fail = active = 0
+    lines = ["📊 <b>GÜN SONU RAPORU</b>", ""]
+    for row in rows:
+        symbol = str(row.get("symbol") or "").replace(".IS", "")
+        entry = _price_text(row.get("entry_price"))
+        if row.get("status") != "CLOSED":
+            active += 1
+            lines.append(f"⏳ {symbol} | {entry} → -")
+            continue
+        result = row.get("net_result_pct")
+        if result is None:
+            result = row.get("result_pct")
+        result = float(result or 0.0)
+        exit_price = _price_text(row.get("exit_price"))
+        if result > 0:
+            success += 1
+            marker = "✅"
+        else:
+            fail += 1
+            marker = "❌"
+        lines.append(f"{marker} {symbol} | {entry} → {exit_price} | {result:+.2f}%")
+
+    total = len(rows)
+    success_rate = success / total * 100.0 if total else 0.0
+    lines.extend([
+        "", "📊 <b>ÖZET</b>",
+        f"Toplam: {total}",
+        f"✅ Başarılı: {success}",
+        f"❌ Başarısız: {fail}",
+        f"⏳ Açık: {active}",
+        "", f"📈 Başarı Oranı: %{success_rate:.1f}",
+        "", f"🕒 {now.strftime('%H:%M')}",
+    ])
+    return "\n".join(lines)
 
 
 def build_v4_weekly_report():

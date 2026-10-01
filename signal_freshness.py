@@ -2,6 +2,7 @@
 
 import math
 import time
+from datetime import datetime
 
 
 def _num(value, default=None):
@@ -34,11 +35,22 @@ def validate_execution_quote(signal, quote, now=None):
     if quote_age > 45.0:
         return None, "stale_execution_quote"
 
+    generated_at = signal.get("generated_at")
+    signal_age = None
+    if generated_at:
+        try:
+            generated = datetime.fromisoformat(str(generated_at))
+            signal_age = max(0.0, now - generated.timestamp())
+        except Exception:
+            signal_age = None
+    if scope == "INTRADAY" and signal_age is not None and signal_age > 30.0:
+        return None, "late_decision_latency"
+
     slippage_pct = (current / trigger - 1.0) * 100.0
     atr_pct = max(0.0, _num(signal.get("atr_pct"), 0.0) or 0.0)
 
     if scope == "INTRADAY":
-        max_up = min(0.65, max(0.35, atr_pct * 0.75))
+        max_up = min(0.35, max(0.20, atr_pct * 0.35))
         max_down = 0.45
         min_remaining_rr = 0.80
     else:
@@ -67,6 +79,7 @@ def validate_execution_quote(signal, quote, now=None):
     signal["execution_slippage_pct"] = round(slippage_pct, 3)
     signal["execution_source"] = quote.get("source") or "FAST_QUOTE"
     signal["execution_observed_at"] = observed_at
+    signal["decision_latency_seconds"] = round(signal_age, 2) if signal_age is not None else None
     signal["entry_price"] = round(trigger, 2)
     signal["price"] = round(trigger, 2)
     return signal, "accepted"

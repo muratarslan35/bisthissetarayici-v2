@@ -90,6 +90,39 @@ jobs:
           """):
               print(dict(r))
 
+          print("=== TODAY DEPTH IMAGE/OCR EVIDENCE ===")
+          for r in cur.execute("""
+            SELECT symbol, depth_status, depth_parsed_json, depth_error,
+                   depth_requested_at, depth_response_at
+            FROM external_market_verifications
+            WHERE trade_date=date('now','localtime')
+              AND depth_status IS NOT NULL
+            ORDER BY id
+          """):
+              item=dict(r)
+              raw=item.pop('depth_parsed_json', None)
+              parsed={}
+              try:
+                  parsed=json.loads(raw or '{}')
+              except Exception:
+                  pass
+              quality=parsed.get('quality') or {}
+              totals=parsed.get('depth_totals') or {}
+              header=parsed.get('header') or {}
+              item.update({
+                  'image_read': bool(parsed.get('image_sha256')),
+                  'parser_source': parsed.get('source'),
+                  'ocr_complete': bool(quality.get('complete')),
+                  'valid_depth_levels': quality.get('valid_depth_levels'),
+                  'trade_rows': quality.get('trade_rows'),
+                  'institution_flow_rows': len(parsed.get('institution_flow') or []),
+                  'market_volume': header.get('volume') or parsed.get('volume'),
+                  'buy_quantity': totals.get('buy_quantity') or parsed.get('buy_total'),
+                  'sell_quantity': totals.get('sell_quantity') or parsed.get('sell_total'),
+                  'buy_sell_ratio': totals.get('buy_sell_ratio') or parsed.get('buy_sell_ratio'),
+              })
+              print(item)
+
           print("=== TODAY SIGNAL BOT CONTRIBUTION ===")
           for r in cur.execute("""
             SELECT symbol, scope, score, created_at,
@@ -99,6 +132,29 @@ jobs:
             ORDER BY id
           """):
               print(dict(r))
+
+          print("=== TODAY SIGNAL EXECUTION TIMING ===")
+          for r in cur.execute("""
+            SELECT symbol, scope, created_at, metadata_json
+            FROM strategy_signals
+            WHERE substr(created_at,1,10)=date('now','localtime')
+            ORDER BY id
+          """):
+              item=dict(r)
+              try:
+                  meta=json.loads(item.pop('metadata_json') or '{}')
+              except Exception:
+                  meta={}
+                  item.pop('metadata_json', None)
+              item.update({
+                  'trigger_price': meta.get('trigger_price'),
+                  'current_price': meta.get('current_price'),
+                  'slippage_pct': meta.get('execution_slippage_pct'),
+                  'decision_latency_sec': meta.get('decision_latency_seconds'),
+                  'publish_latency_sec': meta.get('publish_latency_seconds'),
+                  'quote_age_sec': meta.get('execution_quote_age_seconds'),
+              })
+              print(item)
 
           print("=== TODAY PAPER TRADE OUTCOMES ===")
           for r in cur.execute("""

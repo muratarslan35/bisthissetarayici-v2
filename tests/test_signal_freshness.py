@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 
 from signal_freshness import prepare_fresh_candidates, validate_execution_quote
 
@@ -43,6 +44,17 @@ class SignalFreshnessTests(unittest.TestCase):
         )
         self.assertIsNone(result)
         self.assertEqual(reason, "stale_execution_quote")
+
+    def test_rejects_intraday_decision_that_waited_before_publish(self):
+        signal = self.base()
+        signal["generated_at"] = datetime.fromtimestamp(
+            960.0, tz=timezone.utc
+        ).isoformat()
+        result, reason = validate_execution_quote(
+            signal, self.quote(100.1), now=1_000.0
+        )
+        self.assertIsNone(result)
+        self.assertEqual(reason, "late_decision_latency")
 
     def test_position_has_looser_but_bounded_execution_window(self):
         accepted, _ = validate_execution_quote(
