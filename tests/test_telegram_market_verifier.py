@@ -193,6 +193,44 @@ class TelegramMarketVerifierTests(unittest.TestCase):
             signal, {**parsed, "header": {"last_price": 104.0, "volume": 2_500_000}}
         )["confirmed"])
 
+    def test_depth_analysis_exposes_institutional_flow_from_image(self):
+        signal = {"current_price": 100.0, "entry_price": 99.5}
+        parsed = {
+            "header": {"last_price": 100.2, "volume": 2_500_000},
+            "depth_totals": {
+                "buy_quantity": 1_500_000,
+                "sell_quantity": 750_000,
+                "buy_sell_ratio": 2.0,
+            },
+            "institution_flow": [
+                {"institution": "Vakif", "net_quantity": 300_000},
+                {"institution": "QNB", "net_quantity": -120_000},
+            ],
+            "quality": {"complete": True, "valid_depth_levels": 9, "trade_rows": 12},
+        }
+        result = verifier._depth_analysis(signal, parsed)
+        self.assertEqual(result["institutional_buy_net"], 300_000)
+        self.assertEqual(result["institutional_sell_net"], 120_000)
+        self.assertEqual(result["top_net_buyer"], "Vakif")
+        self.assertEqual(result["institution_flow_rows"], 2)
+
+    def test_pending_depth_never_delays_intraday_channel_signal(self):
+        now = datetime(2026, 9, 28, 10, 30, tzinfo=ZoneInfo("Europe/Istanbul"))
+        signal = {
+            "symbol": "THYAO.IS", "score": 96, "signal_scope": "INTRADAY",
+            "entry_price": 300, "stop_loss": 292, "tp1": 310,
+            "risk_pct": 2.67, "data_confidence": 95,
+            "relative_strength_percentile": 93, "session_rvol": 1.6,
+        }
+        with patch.object(verifier, "ENABLED", True), \
+             patch.object(verifier, "_now", return_value=now), \
+             patch.object(verifier, "get_result", return_value={
+                 "status": "NOT_REQUESTED", "depth_status": "PENDING"
+             }):
+            output = verifier.gate_signal(signal)
+        self.assertIs(output, signal)
+        self.assertNotIn("bot_support", output)
+
     def test_non_pool_signal_has_no_bot_label(self):
         now = datetime(2026, 9, 28, 10, 30, tzinfo=ZoneInfo("Europe/Istanbul"))
         signal = {

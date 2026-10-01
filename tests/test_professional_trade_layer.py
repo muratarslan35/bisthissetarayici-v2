@@ -168,6 +168,34 @@ class LedgerMigrationTests(unittest.TestCase):
         self.assertEqual(row["status"], "OPEN")
         self.assertEqual(row["stop_breached"], 1)
 
+    def test_daily_report_is_one_list_with_open_win_and_loss(self):
+        now = datetime(2026, 9, 28, 18, 8, tzinfo=trade_ledger.TR_TZ)
+        base = {
+            "signal_scope": "INTRADAY", "main_algorithm": "INTRADAY_MOMENTUM_V3",
+            "score": 92, "stop_loss": 95.0, "tp1": 105.0,
+            "tp2": 110.0, "tp3": 115.0,
+        }
+        with patch.object(trade_ledger, "_now", return_value=now):
+            for symbol, entry in (("OPEN.IS", 100.0), ("WIN.IS", 200.0), ("LOSS.IS", 300.0)):
+                self.assertTrue(trade_ledger.record_signal({
+                    **base, "symbol": symbol, "entry_price": entry,
+                }))
+            conn = trade_ledger.get_connection()
+            conn.execute(
+                "UPDATE paper_trades SET status='CLOSED', exit_price=204, net_result_pct=2.0 WHERE symbol='WIN.IS'"
+            )
+            conn.execute(
+                "UPDATE paper_trades SET status='CLOSED', exit_price=294, net_result_pct=-2.0 WHERE symbol='LOSS.IS'"
+            )
+            conn.commit()
+            conn.close()
+            report = trade_ledger.build_v4_daily_report(scope="INTRADAY")
+        self.assertIn("⏳ OPEN | 100 → -", report)
+        self.assertIn("✅ WIN | 200 → 204 | +2.00%", report)
+        self.assertIn("❌ LOSS | 300 → 294 | -2.00%", report)
+        self.assertIn("Toplam: 3", report)
+        self.assertIn("Başarı Oranı: %33.3", report)
+
 
 if __name__ == "__main__":
     unittest.main()
