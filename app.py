@@ -1810,7 +1810,7 @@ def scanner_loop():
             # ==================================================
 
             cycle_position_candidates = []
-            cycle_intraday_candidates = []
+            cycle_intraday_published = 0
             cycle_items = {
                 item.get("symbol"): item
                 for item in market_data
@@ -1877,7 +1877,25 @@ def scanner_loop():
                         )
 
                         cycle_position_candidates.extend(position_signals)
-                        cycle_intraday_candidates.extend(intraday_signals)
+
+                        # Publish a qualifying channel setup at the point it is
+                        # discovered.  Waiting for the remaining market-wide
+                        # OHLCV loop used to turn an early trigger into a late
+                        # notification several minutes later.
+                        if intraday_signals:
+                            with _SIGNAL_PUBLISH_LOCK:
+                                immediate = select_publishable_candidates(
+                                    intraday_signals, "INTRADAY", cycle_cap=1
+                                )
+                                live_quote = fetch_fast_quotes([symbol])
+                                immediate = prepare_fresh_candidates(
+                                    immediate,
+                                    live_quote,
+                                    log=lambda msg: print(msg, flush=True),
+                                )
+                                for sig in immediate:
+                                    if publish_v5_signal(sig, item):
+                                        cycle_intraday_published += 1
 
                     except Exception as e:
                         print(f"⚠ V3 {symbol} hata: {e}", flush=True)
@@ -2180,17 +2198,13 @@ Zarar: %{round((price-entry)/entry*100,2)}
                     selected_positions = select_publishable_candidates(
                         cycle_position_candidates, "POSITION"
                     )
-                    selected_intraday = select_publishable_candidates(
-                        cycle_intraday_candidates, "INTRADAY"
-                    )
-
                     # Execution is a separate decision from signal discovery.
                     # Batch one current quote for every candidate and preserve
                     # the original trigger price. Late moves are recorded in
                     # logs but never advertised as executable entries.
                     execution_symbols = list(dict.fromkeys(
                         sig.get("symbol")
-                        for sig in selected_positions + selected_intraday
+                        for sig in selected_positions
                         if sig.get("symbol")
                     ))
                     execution_quotes = fetch_fast_quotes(execution_symbols)
@@ -2200,27 +2214,16 @@ Zarar: %{round((price-entry)/entry*100,2)}
                         execution_quotes,
                         log=freshness_log,
                     )
-                    selected_intraday = prepare_fresh_candidates(
-                        selected_intraday,
-                        execution_quotes,
-                        log=freshness_log,
-                    )
-
                     for sig in selected_positions:
                         publish_v5_signal(
                             sig, cycle_items.get(sig.get("symbol"), {})
                         )
 
-                    for sig in selected_intraday:
-                        publish_v5_signal(
-                            sig, cycle_items.get(sig.get("symbol"), {})
-                        )
-
-                    if selected_positions or selected_intraday:
+                    if selected_positions or cycle_intraday_published:
                         print(
                             "SIGNAL_POLICY "
                             f"position={len(selected_positions)} "
-                            f"intraday={len(selected_intraday)} "
+                            f"intraday={cycle_intraday_published} "
                             f"limits={policy_limits()}",
                             flush=True,
                         )

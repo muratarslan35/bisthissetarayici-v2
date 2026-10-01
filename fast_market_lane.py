@@ -13,7 +13,7 @@ TRADINGVIEW_SCAN_URL = os.getenv(
     "https://scanner.tradingview.com/turkey/scan",
 )
 
-FAST_POLL_SECONDS = max(10, int(os.getenv("FAST_POLL_SECONDS", "20")))
+FAST_POLL_SECONDS = max(10, int(os.getenv("FAST_POLL_SECONDS", "10")))
 FAST_QUOTE_MAX_AGE_SECONDS = max(
     20,
     int(os.getenv("FAST_QUOTE_MAX_AGE_SECONDS", "45")),
