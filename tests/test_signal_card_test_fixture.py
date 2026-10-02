@@ -4,9 +4,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from PIL import Image
+import numpy as np
+import pandas as pd
 
 import signal_card_v3
+from professional_technical_engine import rsi_wilder_series
 from signal_card_test_fixture import build_test_signal_card
+from strategy_v3 import _rsi_wilder
 
 
 class SignalCardTestFixtureTests(unittest.TestCase):
@@ -50,6 +54,32 @@ class SignalCardTestFixtureTests(unittest.TestCase):
                 os.remove(path)
             except OSError:
                 pass
+
+    def test_rsi_kpi_matches_the_rsi_plotted_from_chart_candles(self):
+        with patch.object(signal_card_v3, "_metric", wraps=signal_card_v3._metric) as metrics, \
+                patch.object(signal_card_v3, "_text", wraps=signal_card_v3._text) as draw_text:
+            path, _ = build_test_signal_card()
+        try:
+            metric = next(call for call in metrics.call_args_list if call.args[4] == "4H RSI")
+            kpi_value = float(metric.args[5])
+            labels = [str(call.args[2]) for call in draw_text.call_args_list if len(call.args) > 2]
+            self.assertTrue(any(label.startswith(f"4H RSI(14) {kpi_value:.1f} ·") for label in labels))
+            self.assertTrue(any(label.startswith("1H RSI(14) ") for label in labels))
+            # Fixture metadata intentionally says 57.8; the KPI must follow its
+            # chart's actual close series rather than that stale snapshot value.
+            self.assertNotEqual(kpi_value, 57.8)
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    def test_rsi_series_uses_the_same_seeded_wilder_calculation_as_signals(self):
+        x = np.arange(80, dtype=float)
+        close = pd.Series(40 + x * 0.09 + np.sin(x / 2.7) * 1.8)
+        series_value = float(rsi_wilder_series(close, 14).dropna().iloc[-1])
+        signal_value = _rsi_wilder(close, 14)
+        self.assertAlmostEqual(series_value, signal_value, places=2)
 
     def test_position_charts_are_stacked_full_width(self):
         with patch.object(signal_card_v3, "_draw_candle_chart", wraps=signal_card_v3._draw_candle_chart) as chart:
