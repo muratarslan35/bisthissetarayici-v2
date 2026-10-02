@@ -11,18 +11,19 @@ from professional_technical_engine import chart_geometry, most_series, rsi_diver
 TR_TZ = ZoneInfo("Europe/Istanbul")
 
 W, H = 1920, 1640
-BG = (10, 20, 34)
-PANEL = (20, 38, 60)
-PANEL2 = (25, 48, 75)
-GRID = (49, 70, 96)
-TEXT = (246, 249, 252)
-MUTED = (171, 188, 208)
-GREEN = (48, 210, 120)
-RED = (245, 86, 86)
-AMBER = (245, 181, 64)
-BLUE = (94, 158, 255)
-CYAN = (50, 212, 236)
-TEAL = (54, 211, 176)
+BG = (8, 17, 30)
+PANEL = (17, 31, 49)
+PANEL2 = (24, 43, 64)
+GRID = (43, 60, 79)
+TEXT = (237, 243, 250)
+MUTED = (158, 177, 198)
+GREEN = (44, 197, 164)
+RED = (238, 105, 117)
+AMBER = (244, 190, 99)
+BLUE = (91, 169, 255)
+CYAN = (93, 198, 219)
+TEAL = (104, 219, 196)
+VIOLET = (183, 138, 247)
 WHITE = (255, 255, 255)
 
 
@@ -87,7 +88,7 @@ def _line_with_label(draw, x, w, yy, color, label, dash=False, width=2, label_y=
     label_y = yy if label_y is None else label_y
     if abs(label_y - yy) > 2:
         draw.line((x + w - 122, yy, x + w - 122, label_y), fill=color, width=1)
-    _rounded(draw, (x + w - 142, label_y - 13, x + w + 2, label_y + 13), 6, fill=(11, 23, 38))
+    _rounded(draw, (x + w - 142, label_y - 13, x + w + 2, label_y + 13), 6, fill=BG)
     _text(draw, (x + w - 8, label_y), label, 13, color, True, "rm")
 
 
@@ -103,6 +104,16 @@ def _draw_series_line(draw, values, color, x, w, lo, hi, y, h, width=2):
         draw.line(pts, fill=color, width=width)
 
 
+def _has_rising_trend(df):
+    if df is None or len(df) < 8:
+        return False
+    lower = (chart_geometry(df).get("trend_lines") or {}).get("lower") or []
+    if len(lower) != 2:
+        return False
+    start, end = (_num(value) for value in lower)
+    return start is not None and end is not None and end > start
+
+
 def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars=90, show_rsi=True):
     x0, y0, x1, y1 = box
     pad_l, pad_r, pad_t, pad_b = 66, 92, 64, 58
@@ -115,9 +126,8 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     volume_y, volume_h = y + price_h + 10, 52
     rsi_y, rsi_h = volume_y + volume_h + 22, 88
 
-    _rounded(draw, box, 18, fill=(14, 28, 46), outline=GRID)
+    _rounded(draw, box, 18, fill=(12, 24, 39), outline=GRID)
     _text(draw, (x0 + 22, y0 + 15), title, 27, WHITE, True)
-    _text(draw, (x1 - 22, y0 + 18), "Mum · Hacim · EMA20/50 · Yapı", 18, MUTED, False, "ra")
 
     if df is None or len(df) < 8:
         _text(draw, ((x0 + x1) / 2, (y0 + y1) / 2), "Mum verisi yok", 26, MUTED, True, "mm")
@@ -201,8 +211,8 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     most_values = most_series(df, period=9, percent=2.0)
     if most_values is not None:
         vals = [float(v) for v in most_values.tail(n)]
-        _draw_series_line(draw, vals, (218, 112, 255), x, w, lo, hi, y, price_h, 3)
-        _text(draw, (x + 10, y + price_h - 26), f"MOST(9,2) {vals[-1]:.2f}", 13, (218, 112, 255), True)
+        _draw_series_line(draw, vals, VIOLET, x, w, lo, hi, y, price_h, 3)
+        _text(draw, (x + 10, y + price_h - 26), f"MOST(9,2) {vals[-1]:.2f}", 13, VIOLET, True)
 
     structural_levels = () if timeframe == "4H" else (
         (sr4.get("support"), GREEN, f"{timeframe} DESTEK", True),
@@ -281,6 +291,7 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
 
 def _metric(draw, x, y, w, title, value, color=TEXT, subtitle=None):
     _rounded(draw, (x, y, x + w, y + 100), 14, fill=PANEL2, outline=GRID)
+    draw.rounded_rectangle((x + 2, y + 2, x + w - 2, y + 6), radius=2, fill=color)
     _text(draw, (x + 16, y + 12), title, 17, MUTED, True)
     _text(draw, (x + 16, y + 40), value, 29, color, True)
     if subtitle:
@@ -336,8 +347,9 @@ def build_signal_card(signal, item, state=None):
     phase_tr = {"STARTING": "HAREKET BAŞLANGICI", "EARLY_TREND": "ERKEN TREND"}.get(phase, phase)
     bot_support = signal.get("bot_support") or {}
     bot_badge = "BOT TEYİTLİ · " if bot_support else ""
-    _text(draw, (48, 89), f"{bot_badge}{algo.title()}  ·  {phase_tr}", 17, GREEN if bot_support else CYAN, True)
-    _text(draw, (W - 48, 65), "PROFESYONEL YAPI MOTORU", 14, MUTED, True, "ra")
+    algo_label = {"TREND START": "TREND BAŞLANGICI"}.get(algo.upper(), algo.title())
+    _text(draw, (48, 89), f"{bot_badge}{algo_label}", 17, GREEN if bot_support else CYAN, True)
+    _text(draw, (W - 48, 65), "BIST · TEKNİK SİNYAL", 15, MUTED, True, "ra")
 
     entry = _num(signal.get("entry_price"))
     stop = _num(signal.get("stop_loss"))
@@ -424,7 +436,7 @@ def build_signal_card(signal, item, state=None):
     for index, evidence in enumerate(confirmations[:5]):
         if index:
             draw.line((evidence_box[0] + 22, yy - 10, evidence_box[2] - 22, yy - 10), fill=GRID, width=1)
-        _rounded(draw, (evidence_box[0] + 22, yy, evidence_box[0] + 57, yy + 35), 12, fill=(24, 58, 53), outline=(33, 99, 80))
+        _rounded(draw, (evidence_box[0] + 22, yy, evidence_box[0] + 57, yy + 35), 12, fill=(22, 54, 50), outline=(39, 112, 96))
         _text(draw, (evidence_box[0] + 39, yy + 17), "✓", 21, GREEN, True, "mm")
         yy = _wrapped(
             draw, (evidence_text_x, yy + 2), evidence,
@@ -436,9 +448,9 @@ def build_signal_card(signal, item, state=None):
     risk_text_x = risk_box[0] + 24
     risk_text_w = risk_box[2] - risk_text_x - 24
     if warnings:
-        _rounded(draw, risk_box, 16, fill=(54, 38, 31), outline=AMBER, width=2)
+        _rounded(draw, risk_box, 16, fill=(48, 38, 35), outline=AMBER, width=2)
         _text(draw, (risk_text_x, bottom_top + 102), "TAKİP EDİLECEK RİSK", 23, AMBER, True)
-        _rounded(draw, (risk_text_x, bottom_top + 151, risk_box[2] - 24, bottom_top + 191), 12, fill=(83, 54, 36))
+        _rounded(draw, (risk_text_x, bottom_top + 151, risk_box[2] - 24, bottom_top + 191), 12, fill=(76, 58, 42))
         _text(draw, (risk_text_x + 16, bottom_top + 171), "DİKKAT", 17, AMBER, True, "lm")
         ry = bottom_top + 220
         for warning in warnings[:2]:
@@ -446,34 +458,39 @@ def build_signal_card(signal, item, state=None):
             ry = _wrapped(draw, (risk_text_x + 28, ry), warning, risk_text_w - 32, 22, TEXT, False, 3, 6) + 16
         _wrapped(draw, (risk_text_x, height - 190), "Giriş kararında bu koşulu yeniden kontrol et.", risk_text_w, 19, MUTED, False, 2, 6)
     else:
-        _rounded(draw, risk_box, 16, fill=(24, 52, 48), outline=GREEN, width=2)
+        _rounded(draw, risk_box, 16, fill=(21, 47, 45), outline=GREEN, width=2)
         _text(draw, (risk_text_x, bottom_top + 102), "RİSK DURUMU", 23, GREEN, True)
-        _rounded(draw, (risk_text_x, bottom_top + 151, risk_box[2] - 24, bottom_top + 191), 12, fill=(30, 75, 58))
+        _rounded(draw, (risk_text_x, bottom_top + 151, risk_box[2] - 24, bottom_top + 191), 12, fill=(29, 67, 59))
         _text(draw, (risk_text_x + 16, bottom_top + 171), "YAPISAL VETO YOK", 17, GREEN, True, "lm")
         _wrapped(draw, (risk_text_x, bottom_top + 222), "Mevcut sinyalde ek bir teknik uyarı oluşmadı.", risk_text_w, 24, TEXT, False, 4, 8)
         _wrapped(draw, (risk_text_x, height - 190), "İşlem planındaki stop seviyesini koru.", risk_text_w, 19, MUTED, False, 2, 6)
 
-    # Stable color contract, printed on every Telegram card.
+    # Keep the key limited to lines that are actually visible on this card.
     legend = [
         (BLUE, "EMA20 · kısa trend"),
         (AMBER, "EMA50 · ana trend"),
-        ((218, 112, 255), "MOST · trend stop"),
-        (GREEN, "Destek"),
-        (RED, "Direnç"),
-        (TEAL, "Yükselen trend"),
+        (VIOLET, "MOST · trend stop"),
     ]
+    if _has_rising_trend(chart_df) or (scope == "POSITION" and _has_rising_trend(hourly_df)):
+        legend.append((TEAL, "Yükselen trend"))
+    structures = signal.get("technical_structures") or {}
+    sr_levels = (structures.get("support_resistance") or {}).get("1H" if scope == "POSITION" else "15M") or {}
+    if _num(sr_levels.get("support")) is not None:
+        legend.append((GREEN, "Destek · 1H" if scope == "POSITION" else "Destek · 15D"))
+    if _num(sr_levels.get("resistance")) is not None:
+        legend.append((RED, "Direnç · 1H" if scope == "POSITION" else "Direnç · 15D"))
     legend_y = height - 82
-    _text(draw, (30, legend_y - 25), "ÇİZGİ RENKLERİ", 13, MUTED, True)
+    _text(draw, (30, legend_y - 25), "GRAFİK GÖSTERGELERİ", 14, MUTED, True)
     xx = 30
     legend_step = (W - 60) / len(legend)
     for color, label in legend:
-        draw.line((xx, legend_y, xx + 25, legend_y), fill=color, width=5)
-        _text(draw, (xx + 34, legend_y), label, 12, TEXT, True, "lm")
+        draw.line((xx, legend_y, xx + 25, legend_y), fill=color, width=4)
+        _text(draw, (xx + 34, legend_y), label, 14, TEXT, True, "lm")
         xx += legend_step
 
     now = datetime.now(TR_TZ).strftime("%d.%m.%Y %H:%M:%S")
-    _text(draw, (30, height - 18), "Ücretsiz OHLCV · Order-block/FVG mum türevidir, L2 emir defteri değildir.", 12, MUTED, False, "lb")
-    _text(draw, (W - 30, height - 18), now, 12, MUTED, False, "rb")
+    _text(draw, (30, height - 18), "Ücretsiz OHLCV · Order-block/FVG mum türevidir, L2 emir defteri değildir.", 14, MUTED, False, "lb")
+    _text(draw, (W - 30, height - 18), now, 14, MUTED, False, "rb")
 
     out_dir = Path("cards")
     out_dir.mkdir(exist_ok=True)
