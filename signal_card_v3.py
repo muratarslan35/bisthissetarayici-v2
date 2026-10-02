@@ -154,7 +154,7 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     reserved = 190 if show_rsi else 92
     price_h = h - reserved
     volume_y, volume_h = y + price_h + 10, 52
-    rsi_y, rsi_h = volume_y + volume_h + 22, 88
+    rsi_y, rsi_h = volume_y + volume_h + 16, 88
 
     _rounded(draw, box, 18, fill=(12, 24, 39), outline=GRID)
     _text(draw, (x0 + 22, y0 + 15), title, 27, WHITE, True)
@@ -208,6 +208,17 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
         draw.polygon(upper_points + list(reversed(middle_points)), fill=(21, 42, 56))
         draw.polygon(middle_points + list(reversed(lower_points)), fill=(17, 48, 49))
 
+    # Give volume and RSI their own shaded strips beneath the price plot so
+    # neither indicator can be mistaken for candlestick data.
+    draw.rectangle((x, volume_y, x + w, volume_y + volume_h), fill=(9, 19, 32))
+    if show_rsi:
+        draw.rectangle((x, rsi_y, x + w, rsi_y + rsi_h), fill=(10, 22, 36))
+    draw.line((x, volume_y, x + w, volume_y), fill=GRID, width=1)
+    draw.line((x, volume_y + volume_h, x + w, volume_y + volume_h), fill=GRID, width=1)
+    if show_rsi:
+        draw.line((x, rsi_y, x + w, rsi_y), fill=GRID, width=1)
+        draw.line((x, rsi_y + rsi_h, x + w, rsi_y + rsi_h), fill=GRID, width=1)
+
     for i in range(6):
         yy = y + i * price_h / 5
         draw.line((x, yy, x + w, yy), fill=GRID, width=1)
@@ -252,6 +263,8 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
             vh = float(volume.iloc[i]) / vmax * volume_h
             draw.rectangle((cx - cw * 0.28, volume_y + volume_h - vh, cx + cw * 0.28, volume_y + volume_h), fill=(*color[:3],))
 
+    _text(draw, (x + w + 10, volume_y + 3), "HACİM", 12, MUTED, True, "lm")
+
     pattern = geometry.get("pattern") or {}
     if triangle:
         pattern_labels = {
@@ -292,8 +305,10 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     rsi = rsi_wilder_series(df["Close"], 14).tail(n)
     for level, color in ((70, RED), (50, GRID), (30, GREEN)):
         yy = rsi_y + (100 - level) / 100 * rsi_h
-        if level == 50:
-            draw.line((x, yy, x + w, yy), fill=GRID, width=1)
+        line_color = GRID if level == 50 else (54, 71, 88)
+        draw.line((x, yy, x + w, yy), fill=line_color, width=1)
+        if level in (70, 30):
+            _text(draw, (x + w + 10, yy), str(level), 12, color, True, "lm")
     rsi_pts = []
     for i, value in enumerate(rsi):
         if pd.notna(value):
@@ -431,7 +446,7 @@ def build_signal_card(signal, item, state=None):
             title="1 SAATLİK TRADE GRAFİĞİ",
             timeframe="1H",
             max_bars=None,
-            show_rsi=False,
+            show_rsi=True,
         )
     else:
         chart_bottom = 950
