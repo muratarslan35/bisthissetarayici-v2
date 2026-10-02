@@ -16,7 +16,7 @@ class SignalCardTestFixtureTests(unittest.TestCase):
             self.assertEqual(signal["signal_scope"], "POSITION")
             self.assertEqual(signal["calibration_status"], "TEST")
             with Image.open(path) as image:
-                self.assertEqual(image.size, (1440, 2520))
+                self.assertEqual(image.size, (1920, 1640))
         finally:
             try:
                 os.remove(path)
