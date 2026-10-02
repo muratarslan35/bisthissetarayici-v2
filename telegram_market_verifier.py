@@ -15,6 +15,8 @@ import json
 import os
 import re
 import threading
+import tempfile
+import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -30,7 +32,7 @@ TARGET = os.getenv("EXTERNAL_VERIFY_TARGET", "borsabilgibot").lstrip("@")
 EXPECTED_USER_ID = os.getenv("TELEGRAM_EXPECTED_USER_ID", "").strip()
 THEORETICAL_COMMAND = os.getenv("EXTERNAL_VERIFY_THEORETICAL_COMMAND", "/teorik {symbol}")
 DEPTH_COMMAND = os.getenv("EXTERNAL_VERIFY_DEPTH_COMMAND", "/derinlik {symbol}")
-RESPONSE_TIMEOUT = min(45, max(5, int(os.getenv("EXTERNAL_VERIFY_TIMEOUT", "20"))))
+RESPONSE_TIMEOUT = min(45, max(30, int(os.getenv("EXTERNAL_VERIFY_TIMEOUT", "30"))))
 REQUEST_GAP_SECONDS = min(
     300, max(60, int(os.getenv("EXTERNAL_VERIFY_REQUEST_GAP_SECONDS", "60")))
 )
@@ -618,9 +620,26 @@ async def _send_one(row):
                         latest_text = image_message.message
                     if not getattr(image_message, "media", None):
                         continue
-                    image_bytes = await client.download_media(image_message, file=bytes)
-                    if image_bytes:
-                        return {"text": latest_text, "image": image_bytes}
+                    handle, image_path = tempfile.mkstemp(
+                        prefix="bist-helper-image-", suffix=".img"
+                    )
+                    os.close(handle)
+                    try:
+                        downloaded = await client.download_media(
+                            image_message, file=image_path
+                        )
+                        if downloaded and os.path.getsize(image_path) > 0:
+                            return {"text": latest_text, "image_path": image_path}
+                    except Exception:
+                        try:
+                            os.unlink(image_path)
+                        except OSError:
+                            pass
+                        raise
+                    try:
+                        os.unlink(image_path)
+                    except OSError:
+                        pass
             return {"text": latest_text, "image": None}
 
 
@@ -630,9 +649,12 @@ def _worker():
         if not row:
             threading.Event().wait(2.0)
             continue
+        image_path = None
+        processing_started = time.monotonic()
         try:
             payload = asyncio.run(_send_one(row))
             text = payload.get("text") or ""
+            image_path = payload.get("image_path")
             ban_reason = _source_ban_reason(text)
             if ban_reason:
                 _finish(
@@ -642,16 +664,30 @@ def _worker():
                 set_source_cooldown(reason=f"source response: {ban_reason}")
                 continue
             if row["query_kind"] == "depth":
-                image_bytes = payload.get("image")
-                if image_bytes:
+                if image_path:
                     from depth_image_parser import parse_depth_image
-                    parsed = parse_depth_image(image_bytes, row.get("symbol"))
-                    parsed["image_sha256"] = hashlib.sha256(image_bytes).hexdigest()
+                    parsed = parse_depth_image(image_path, row.get("symbol"))
+                    digest = hashlib.sha256()
+                    with open(image_path, "rb") as image_file:
+                        for chunk in iter(lambda: image_file.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                    parsed["image_sha256"] = digest.hexdigest()
+                    parsed["image_bytes"] = os.path.getsize(image_path)
                 else:
                     parsed = parse_depth_response(text)
             else:
                 parsed = parse_response(text)
             status = "DATA_READY" if parsed.get("confirmation") else "INSUFFICIENT_DATA"
+            if row["query_kind"] == "depth" and image_path:
+                quality = parsed.get("quality") or {}
+                print(
+                    "EXTERNAL_VERIFY image processed "
+                    f"symbol={row.get('symbol')} bytes={parsed.get('image_bytes')} "
+                    f"elapsed={time.monotonic() - processing_started:.1f}s "
+                    f"levels={quality.get('valid_depth_levels')} "
+                    f"trades={quality.get('trade_rows')} complete={quality.get('complete')}",
+                    flush=True,
+                )
             _finish(row["id"], row["query_kind"], status, response_text=text, parsed=parsed)
         except Exception as exc:
             # No automatic retry: each stage is allowed exactly one outbound request.
@@ -659,6 +695,16 @@ def _worker():
             if _source_ban_reason(str(exc)):
                 set_source_cooldown(reason=f"Telegram error: {str(exc)[:300]}")
         finally:
+            if image_path:
+                try:
+                    os.unlink(image_path)
+                except FileNotFoundError:
+                    pass
+                except OSError as cleanup_error:
+                    print(
+                        f"EXTERNAL_VERIFY temporary image cleanup failed: {cleanup_error}",
+                        flush=True,
+                    )
             # The source bot may withhold responses when several commands arrive
             # back-to-back. Keep every request strictly sequential and leave a
             # courteous pause even after a timeout/failure.
