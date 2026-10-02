@@ -186,16 +186,34 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     hi += margin
     lo -= margin
 
+    n = len(df)
+    cw = max(4, w / n)
+    geometry_bars = n
+    geometry_x = x + cw * 0.5
+    geometry_right = x + (n - 0.5) * cw
+    channel_paths = {}
+    for key in ("upper", "middle", "lower"):
+        endpoints = channel.get(key) or []
+        if len(endpoints) == 2 and endpoints[0] > 0 and endpoints[1] > 0:
+            channel_paths[key] = np.exp(np.linspace(np.log(endpoints[0]), np.log(endpoints[1]), geometry_bars))
+    def channel_points(path):
+        return [
+            (geometry_x + i * (geometry_right - geometry_x) / max(geometry_bars - 1, 1), _scale_price(value, lo, hi, y, price_h))
+            for i, value in enumerate(path)
+        ]
+    if all(key in channel_paths for key in ("upper", "middle", "lower")):
+        upper_points = channel_points(channel_paths["upper"])
+        middle_points = channel_points(channel_paths["middle"])
+        lower_points = channel_points(channel_paths["lower"])
+        draw.polygon(upper_points + list(reversed(middle_points)), fill=(15, 31, 45))
+        draw.polygon(middle_points + list(reversed(lower_points)), fill=(15, 38, 43))
+
     for i in range(6):
         yy = y + i * price_h / 5
         draw.line((x, yy, x + w, yy), fill=GRID, width=1)
 
-    n = len(df)
-    cw = max(4, w / n)
-    geometry_bars = n
-    geometry_x = x
-    # Fit the channel to all visible completed candles so the overlay spans
-    # the same time window as the TradingView-like chart.
+    # Fit the channel to all visible candles; no independent support or
+    # resistance overlays are drawn on top of the channel.
     for key, color, dashed, width in (
         ("upper", CHANNEL_UPPER, False, 2),
         ("middle", CHANNEL_MIDDLE, True, 2),
@@ -203,13 +221,12 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     ):
         endpoints = channel.get(key) or []
         if len(endpoints) == 2 and endpoints[0] > 0 and endpoints[1] > 0:
-            path = np.exp(np.linspace(np.log(endpoints[0]), np.log(endpoints[1]), geometry_bars))
-            _draw_price_path(draw, path, color, geometry_x, x + w, lo, hi, y, price_h, width, dashed)
+            _draw_price_path(draw, channel_paths[key], color, geometry_x, geometry_right, lo, hi, y, price_h, width, dashed)
     if triangle:
         for key in ("upper", "lower"):
             endpoints = trend_lines.get(key) or []
             if len(endpoints) == 2:
-                _draw_price_path(draw, endpoints, PATTERN_LINE, geometry_x, x + w, lo, hi, y, price_h, 2, True)
+                _draw_price_path(draw, endpoints, PATTERN_LINE, geometry_x, geometry_right, lo, hi, y, price_h, 2, True)
 
     volume = pd.to_numeric(df.get("Volume"), errors="coerce") if "Volume" in df else None
     vmax = float(volume.max()) if volume is not None and not volume.empty else 0.0
@@ -378,7 +395,7 @@ def build_signal_card(signal, item, state=None):
     gap = 12
     mw = (W - 48 - gap * 5) / 6
     kpis = [
-        ("SİNYAL GÜCÜ", f"{score:.0f}/100", _stage_color(stage), phase_tr),
+        ("SİNYAL GÜCÜ", f"{score:.0f}/100", _stage_color(stage), None),
         ("GİRİŞ", f"{entry:.2f}" if entry is not None else "-", CYAN, "planlanan"),
         ("STOP", f"{stop:.2f}" if stop is not None else "-", RED, f"risk %{signal.get('risk_pct','-')}"),
         ("HEDEF 1", f"{tp1:.2f}" if tp1 is not None else "-", GREEN, "ilk realize"),
@@ -430,54 +447,34 @@ def build_signal_card(signal, item, state=None):
             show_rsi=True,
         )
 
-    # Entry, stop, and target are already in the top KPI row. Use all lower
-    # space for signal evidence and risk, without a repeated lower-left panel.
-    bottom = (24, bottom_top, W - 24, height - 112)
-    _rounded(draw, bottom, 20, fill=PANEL, outline=GRID)
-    _text(draw, (48, bottom_top + 22), "SİNYALİ OKU · TEYİTLER VE TAKİP", 27, WHITE, True)
-
-    evidence_box = (44, bottom_top + 78, 1260, height - 132)
-    _rounded(draw, evidence_box, 16, fill=(15, 30, 49), outline=GRID)
-    _text(draw, (evidence_box[0] + 22, bottom_top + 96), "NEDEN SİNYAL?", 23, WHITE, True)
+    # The top row already contains the trade levels. Keep the lower area open,
+    # with compact signal evidence and risk text instead of returning to cards.
+    draw.line((24, bottom_top, W - 24, bottom_top), fill=GRID, width=2)
+    _text(draw, (44, bottom_top + 20), "SİNYAL TEYİTLERİ", 24, WHITE, True)
     confirmations = list(signal.get("technical_confirmations") or [])
     if not confirmations:
         confirmations = list(signal.get("reasons") or [])
     elif bot_support:
         evidence = "Bot destekli: teorik eşleşme teyidi" if bot_support.get("evidence") == "TEORIK" else "Bot destekli: derinlik teyidi"
         confirmations.insert(0, evidence)
-    evidence_text_x = evidence_box[0] + 76
-    yy = bottom_top + 146
+    col_width = (W - 120) / 3
     for index, evidence in enumerate(confirmations[:5]):
-        if index:
-            draw.line((evidence_box[0] + 22, yy - 10, evidence_box[2] - 22, yy - 10), fill=GRID, width=1)
-        _rounded(draw, (evidence_box[0] + 22, yy, evidence_box[0] + 57, yy + 35), 12, fill=(22, 54, 50), outline=(39, 112, 96))
-        _text(draw, (evidence_box[0] + 39, yy + 17), "✓", 21, GREEN, True, "mm")
-        yy = _wrapped(
-            draw, (evidence_text_x, yy + 2), evidence,
-            evidence_box[2] - evidence_text_x - 22, 24, TEXT, False, 2, 6,
-        ) + 14
+        col, row = index % 3, index // 3
+        xx, yy = 44 + col * col_width, bottom_top + 62 + row * 58
+        _text(draw, (xx, yy + 1), "✓", 20, GREEN, True)
+        _wrapped(draw, (xx + 32, yy), evidence, col_width - 42, 19, TEXT, False, 2, 4)
 
     warnings = list(signal.get("technical_warnings") or [])
-    risk_box = (1280, bottom_top + 78, W - 44, height - 132)
-    risk_text_x = risk_box[0] + 24
-    risk_text_w = risk_box[2] - risk_text_x - 24
+    risk_y = bottom_top + 202
+    draw.line((44, risk_y - 12, W - 44, risk_y - 12), fill=GRID, width=1)
     if warnings:
-        _rounded(draw, risk_box, 16, fill=(48, 38, 35), outline=AMBER, width=2)
-        _text(draw, (risk_text_x, bottom_top + 102), "TAKİP EDİLECEK RİSK", 23, AMBER, True)
-        _rounded(draw, (risk_text_x, bottom_top + 151, risk_box[2] - 24, bottom_top + 191), 12, fill=(76, 58, 42))
-        _text(draw, (risk_text_x + 16, bottom_top + 171), "DİKKAT", 17, AMBER, True, "lm")
-        ry = bottom_top + 220
-        for warning in warnings[:2]:
-            _text(draw, (risk_text_x + 2, ry), "•", 24, AMBER, True)
-            ry = _wrapped(draw, (risk_text_x + 28, ry), warning, risk_text_w - 32, 22, TEXT, False, 3, 6) + 16
-        _wrapped(draw, (risk_text_x, height - 190), "Giriş kararında bu koşulu yeniden kontrol et.", risk_text_w, 19, MUTED, False, 2, 6)
+        _text(draw, (44, risk_y), "İZLENECEK RİSK", 18, AMBER, True)
+        risk_summary = " · ".join(str(warning) for warning in warnings[:2])
+        _wrapped(draw, (230, risk_y), risk_summary, W - 460, 19, TEXT, False, 2, 4)
+        _text(draw, (W - 44, height - 150), "Girişte bu uyarıyı yeniden kontrol et.", 17, MUTED, False, "ra")
     else:
-        _rounded(draw, risk_box, 16, fill=(21, 47, 45), outline=GREEN, width=2)
-        _text(draw, (risk_text_x, bottom_top + 102), "RİSK DURUMU", 23, GREEN, True)
-        _rounded(draw, (risk_text_x, bottom_top + 151, risk_box[2] - 24, bottom_top + 191), 12, fill=(29, 67, 59))
-        _text(draw, (risk_text_x + 16, bottom_top + 171), "YAPISAL VETO YOK", 17, GREEN, True, "lm")
-        _wrapped(draw, (risk_text_x, bottom_top + 222), "Mevcut sinyalde ek bir teknik uyarı oluşmadı.", risk_text_w, 24, TEXT, False, 4, 8)
-        _wrapped(draw, (risk_text_x, height - 190), "İşlem planındaki stop seviyesini koru.", risk_text_w, 19, MUTED, False, 2, 6)
+        _text(draw, (44, risk_y), "RİSK DURUMU", 18, GREEN, True)
+        _text(draw, (230, risk_y), "Yapısal veto yok · işlem planındaki stop seviyesini koru.", 19, TEXT)
 
     # Keep the key limited to lines that are actually visible on this card.
     legend = [
