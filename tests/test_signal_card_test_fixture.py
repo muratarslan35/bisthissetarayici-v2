@@ -74,6 +74,27 @@ class SignalCardTestFixtureTests(unittest.TestCase):
         diverging = {"trend_lines": {"upper": [110, 115], "lower": [90, 84]}}
         self.assertIsNone(signal_card_v3._triangle_shape(diverging))
 
+    def test_converging_triangle_is_drawn_on_both_timeframes(self):
+        geometry = {
+            "channel": {"lower": [90, 92], "middle": [100, 102], "upper": [110, 112]},
+            "trend_lines": {"upper": [110, 104], "lower": [90, 96]},
+            "pattern": {},
+        }
+        with patch.object(signal_card_v3, "chart_geometry", return_value=geometry), \
+                patch.object(signal_card_v3, "_draw_price_path", wraps=signal_card_v3._draw_price_path) as paths, \
+                patch.object(signal_card_v3, "_text", wraps=signal_card_v3._text) as draw_text:
+            path, _ = build_test_signal_card()
+        try:
+            labels = [str(call.args[2]) for call in draw_text.call_args_list if len(call.args) > 2]
+            self.assertEqual(labels.count("SİMETRİK ÜÇGEN"), 2)
+            self.assertIn("ÜÇGEN / TREND SIKIŞMASI", labels)
+            self.assertEqual(paths.call_count, 10)  # 3 channel bands + 2 triangle rails per chart
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
 
 if __name__ == "__main__":
     unittest.main()
