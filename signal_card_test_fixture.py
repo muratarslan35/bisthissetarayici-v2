@@ -65,6 +65,19 @@ def build_test_signal_card(latest=None):
         "calibration_sample_size": 0,
         "time": datetime.now(TR_TZ).strftime("%H:%M"),
     }
-    item = {"tf": {"4h": {"df": frame}}}
+    hx = np.arange(120, dtype=float)
+    hourly_close = base * 0.97 + hx * (base * 0.00025) + np.sin(hx / 4.2) * (base * 0.003)
+    hourly_close[-18:] += np.linspace(0.0, base * 0.02, 18)
+    hourly_volume = np.full(120, 320_000.0)
+    hourly_volume[-18:] = np.linspace(450_000, 920_000, 18)
+    hourly_index = pd.date_range(end=datetime.now(TR_TZ), periods=120, freq="1h")
+    hourly_frame = pd.DataFrame({
+        "Open": hourly_close - np.sin(hx) * base * 0.001,
+        "High": hourly_close + base * 0.003,
+        "Low": hourly_close - base * 0.003,
+        "Close": hourly_close,
+        "Volume": hourly_volume,
+    }, index=hourly_index)
+    item = {"tf": {"4h": {"df": frame}, "1h": {"df": hourly_frame}}}
     path = build_signal_card(signal, item, state={"stage": "TEST", "history": []})
     return path, signal

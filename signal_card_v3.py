@@ -10,7 +10,7 @@ from professional_technical_engine import chart_geometry, most_series, rsi_diver
 
 TR_TZ = ZoneInfo("Europe/Istanbul")
 
-W, H = 1440, 2480
+W, H = 1440, 2520
 BG = (10, 20, 34)
 PANEL = (20, 38, 60)
 PANEL2 = (25, 48, 75)
@@ -116,8 +116,8 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     rsi_y, rsi_h = volume_y + volume_h + 22, 88
 
     _rounded(draw, box, 18, fill=(14, 28, 46), outline=GRID)
-    _text(draw, (x0 + 22, y0 + 15), title, 22, WHITE, True)
-    _text(draw, (x1 - 22, y0 + 18), "Mum · Hacim · EMA20/50 · Yapı", 15, MUTED, False, "ra")
+    _text(draw, (x0 + 22, y0 + 15), title, 27, WHITE, True)
+    _text(draw, (x1 - 22, y0 + 18), "Mum · Hacim · EMA20/50 · Yapı", 18, MUTED, False, "ra")
 
     if df is None or len(df) < 8:
         _text(draw, ((x0 + x1) / 2, (y0 + y1) / 2), "Mum verisi yok", 26, MUTED, True, "mm")
@@ -127,9 +127,6 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     geometry = chart_geometry(df)
     structures = signal.get("technical_structures") or {}
     sr4 = (structures.get("support_resistance") or {}).get(timeframe) or {}
-    entry = _num(signal.get("entry_price"))
-    stop = _num(signal.get("stop_loss"))
-    target = _num(signal.get("tp1"))
     hi = float(pd.to_numeric(df["High"], errors="coerce").max())
     lo = float(pd.to_numeric(df["Low"], errors="coerce").min())
 
@@ -140,7 +137,7 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     trend_end = _num(lower_trend[1]) if len(lower_trend) == 2 else None
     rising_trend = trend_start is not None and trend_end is not None and trend_end > trend_start
     visible_trend = [_num(v) for v in lower_trend if _num(v) is not None] if rising_trend else []
-    levels = [v for v in (entry, stop, target, sr4.get("support"), sr4.get("resistance")) if _num(v) is not None] + visible_trend
+    levels = [v for v in (sr4.get("support"), sr4.get("resistance")) if _num(v) is not None] + visible_trend
     if levels:
         hi = max(hi, max(levels))
         lo = min(lo, min(levels))
@@ -208,9 +205,6 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     structural_levels = (
         (sr4.get("support"), GREEN, f"{timeframe} DESTEK", True),
         (sr4.get("resistance"), RED, f"{timeframe} DİRENÇ", True),
-        (entry, CYAN, "GİRİŞ", False),
-        (stop, RED, "STOP", False),
-        (target, GREEN, "H1", False),
     )
     level_rows = []
     for price, color, label, dashed in structural_levels:
@@ -240,7 +234,7 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     for i in range(7):
         value = hi - (hi - lo) * i / 6
         yy = y + price_h * i / 6
-        _text(draw, (x + w + 10, yy), f"{value:.2f}", 12, MUTED, False, "lm")
+        _text(draw, (x + w + 10, yy), f"{value:.2f}", 14, MUTED, False, "lm")
 
     if not show_rsi:
         if isinstance(df.index, pd.DatetimeIndex):
@@ -284,11 +278,17 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
 
 
 def _metric(draw, x, y, w, title, value, color=TEXT, subtitle=None):
-    _rounded(draw, (x, y, x + w, y + 94), 14, fill=PANEL2, outline=GRID)
-    _text(draw, (x + 14, y + 12), title, 14, MUTED, True)
-    _text(draw, (x + 14, y + 39), value, 25, color, True)
+    _rounded(draw, (x, y, x + w, y + 100), 14, fill=PANEL2, outline=GRID)
+    _text(draw, (x + 16, y + 12), title, 17, MUTED, True)
+    _text(draw, (x + 16, y + 40), value, 29, color, True)
     if subtitle:
-        _text(draw, (x + 14, y + 72), subtitle, 11, MUTED)
+        _text(draw, (x + 16, y + 77), subtitle, 14, MUTED)
+
+
+def _mini_kpi(draw, x, y, w, h, title, value, color=TEXT):
+    _rounded(draw, (x, y, x + w, y + h), 14, fill=PANEL2, outline=GRID)
+    _text(draw, (x + 12, y + 14), title, 13, MUTED, True)
+    _text(draw, (x + 12, y + 52), value, 25, color, True)
 
 
 def _wrapped(draw, xy, text, max_width, size=16, fill=TEXT, bold=False, max_lines=3, line_gap=5):
@@ -400,68 +400,75 @@ def build_signal_card(signal, item, state=None):
         )
         bottom_top = 1900
 
-    # Bottom-left: trade plan and compact technical KPIs.
-    left = (24, bottom_top, 552, H - 112)
-    _rounded(draw, left, 18, fill=PANEL, outline=GRID)
-    oy = bottom_top - 1140
-    _text(draw, (46, 1160 + oy), "TRADE PLANI", 20, WHITE, True)
-    _text(draw, (46, 1200 + oy), "Giriş", 14, MUTED, True)
-    _text(draw, (182, 1195 + oy), f"{entry:.2f}" if entry else "-", 24, CYAN, True)
-    _text(draw, (46, 1242 + oy), "Stop", 14, MUTED, True)
-    _text(draw, (182, 1237 + oy), f"{stop:.2f}" if stop else "-", 24, RED, True)
-    _text(draw, (46, 1284 + oy), "Hedefler", 14, MUTED, True)
-    _text(draw, (182, 1279 + oy), " / ".join(f"{x:.2f}" for x in (tp1, tp2, tp3) if x is not None) or "-", 21, GREEN, True)
-    _text(draw, (46, 1334 + oy), "TEKNİK KPI", 17, MUTED, True)
-    tech = [
-        ("RSI 1D", "-" if r1 is None else f"{r1:.1f}"),
-        ("Hacim", "-" if rvol is None else f"{rvol:.2f}x"),
-        ("Günlük", "-" if day is None else f"%{day:.2f}"),
-        ("Canlı", "-" if current is None else f"{current:.2f}"),
-    ]
-    for i, (label, value) in enumerate(tech):
-        xx = 46 + (i % 2) * 248
-        yy = 1370 + oy + (i // 2) * 72
-        _text(draw, (xx, yy), label, 13, MUTED, True)
-        _text(draw, (xx, yy + 24), value, 21, TEXT, True)
-    calibration = signal.get("calibration_status") or "LEARNING"
-    sample = signal.get("calibration_sample_size") or 0
-    _rounded(draw, (44, 1524 + oy, 532, 1608 + oy), 12, fill=(15, 30, 49), outline=GRID)
-    _text(draw, (62, 1540 + oy), "İSTATİSTİKSEL DOĞRULAMA", 13, MUTED, True)
-    _text(draw, (62, 1568 + oy), f"{calibration} · n={sample}", 19, AMBER if calibration != "CALIBRATED" else GREEN, True)
+    # The upper KPI row already shows entry, stop, and target 1. The wider
+    # lower section is reserved for unique market context, evidence, and risk.
+    bottom = (24, bottom_top, W - 24, H - 112)
+    _rounded(draw, bottom, 20, fill=PANEL, outline=GRID)
+    _text(draw, (48, bottom_top + 22), "SİNYALİ OKU · TEYİTLER VE TAKİP", 27, WHITE, True)
 
-    # Bottom-right: only evidence that formed; no generic indicator dump.
-    right = (572, bottom_top, W - 24, H - 112)
-    _rounded(draw, right, 18, fill=PANEL, outline=GRID)
-    _text(draw, (596, 1160 + oy), "NEDEN SİNYAL?", 20, WHITE, True)
+    market_box = (44, bottom_top + 78, 332, H - 132)
+    _rounded(draw, market_box, 16, fill=(15, 30, 49), outline=GRID)
+    _text(draw, (62, bottom_top + 96), "ANLIK DURUM", 20, MUTED, True)
+    tech = [
+        ("CANLI FİYAT", "-" if current is None else f"{current:.2f}", CYAN),
+        ("RSI · 1G", "-" if r1 is None else f"{r1:.1f}", AMBER),
+        ("GÜNLÜK", "-" if day is None else f"%{day:.2f}", GREEN if (day or 0) >= 0 else RED),
+        ("RVOL", "-" if rvol is None else f"{rvol:.2f}×", BLUE),
+    ]
+    mini_gap, mini_h = 10, 142
+    mini_w = (market_box[2] - market_box[0] - 36 - mini_gap) / 2
+    for i, (label, value, color) in enumerate(tech):
+        _mini_kpi(
+            draw,
+            market_box[0] + 12 + (i % 2) * (mini_w + mini_gap),
+            bottom_top + 142 + (i // 2) * (mini_h + mini_gap),
+            mini_w, mini_h, label, value, color,
+        )
+
+    evidence_box = (350, bottom_top + 78, 1010, H - 132)
+    _rounded(draw, evidence_box, 16, fill=(15, 30, 49), outline=GRID)
+    _text(draw, (372, bottom_top + 96), "NEDEN SİNYAL?", 23, WHITE, True)
     confirmations = list(signal.get("technical_confirmations") or [])
     if not confirmations:
         confirmations = list(signal.get("reasons") or [])
     elif bot_support:
         evidence = "Bot destekli: teorik eşleşme teyidi" if bot_support.get("evidence") == "TEORIK" else "Bot destekli: derinlik teyidi"
         confirmations.insert(0, evidence)
-    yy = 1202 + oy
-    for evidence in confirmations[:5]:
-        _text(draw, (598, yy), "✓", 18, GREEN, True)
-        yy = _wrapped(draw, (628, yy), evidence, 744, 16, TEXT, False, 2, 4) + 12
+    yy = bottom_top + 146
+    for index, evidence in enumerate(confirmations[:5]):
+        if index:
+            draw.line((372, yy - 10, evidence_box[2] - 22, yy - 10), fill=GRID, width=1)
+        _rounded(draw, (372, yy, 407, yy + 35), 12, fill=(24, 58, 53), outline=(33, 99, 80))
+        _text(draw, (389, yy + 17), "✓", 21, GREEN, True, "mm")
+        yy = _wrapped(draw, (425, yy + 2), evidence, 550, 20, TEXT, False, 2, 5) + 14
 
     warnings = list(signal.get("technical_warnings") or [])
+    risk_box = (1028, bottom_top + 78, W - 44, H - 132)
     if warnings:
-        _rounded(draw, (594, 1485 + oy, W - 46, 1598 + oy), 12, fill=(54, 38, 31), outline=AMBER)
-        _text(draw, (614, 1501 + oy), "İZLENEN RİSK", 14, AMBER, True)
-        _wrapped(draw, (614, 1530 + oy), warnings[0], 730, 15, TEXT, False, 2, 4)
+        _rounded(draw, risk_box, 16, fill=(54, 38, 31), outline=AMBER, width=2)
+        _text(draw, (1052, bottom_top + 102), "TAKİP EDİLECEK RİSK", 21, AMBER, True)
+        _rounded(draw, (1052, bottom_top + 151, 1340, bottom_top + 191), 12, fill=(83, 54, 36))
+        _text(draw, (1068, bottom_top + 171), "DİKKAT", 16, AMBER, True, "lm")
+        ry = bottom_top + 220
+        for warning in warnings[:2]:
+            _text(draw, (1054, ry), "•", 22, AMBER, True)
+            ry = _wrapped(draw, (1080, ry), warning, 290, 19, TEXT, False, 3, 5) + 16
+        _wrapped(draw, (1052, H - 190), "Giriş kararında bu koşulu yeniden kontrol et.", 300, 18, MUTED, False, 2, 6)
     else:
-        _rounded(draw, (594, 1510 + oy, W - 46, 1598 + oy), 12, fill=(24, 52, 48), outline=GREEN)
-        _text(draw, (614, 1527 + oy), "YAPISAL VETO YOK", 15, GREEN, True)
-        _text(draw, (614, 1555 + oy), "Stop seviyesi yapının bozulduğu alanı temsil eder.", 14, MUTED)
+        _rounded(draw, risk_box, 16, fill=(24, 52, 48), outline=GREEN, width=2)
+        _text(draw, (1052, bottom_top + 102), "RİSK DURUMU", 21, GREEN, True)
+        _rounded(draw, (1052, bottom_top + 151, 1340, bottom_top + 191), 12, fill=(30, 75, 58))
+        _text(draw, (1068, bottom_top + 171), "YAPISAL VETO YOK", 16, GREEN, True, "lm")
+        _wrapped(draw, (1052, bottom_top + 222), "Mevcut sinyalde ek bir teknik uyarı oluşmadı.", 300, 22, TEXT, False, 4, 8)
+        _wrapped(draw, (1052, H - 190), "İşlem planındaki stop seviyesini koru.", 300, 18, MUTED, False, 2, 6)
 
     # Stable color contract, printed on every Telegram card.
     legend = [
         (BLUE, "EMA20 · kısa trend"),
         (AMBER, "EMA50 · ana trend"),
         ((218, 112, 255), "MOST · trend stop"),
-        (GREEN, "Destek / hedef"),
-        (RED, "Direnç / stop"),
-        (CYAN, "Giriş fiyatı"),
+        (GREEN, "Destek"),
+        (RED, "Direnç"),
         (TEAL, "Yükselen trend"),
     ]
     legend_y = H - 82

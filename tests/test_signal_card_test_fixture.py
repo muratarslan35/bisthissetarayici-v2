@@ -1,9 +1,11 @@
 import os
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
+import signal_card_v3
 from signal_card_test_fixture import build_test_signal_card
 
 
@@ -14,7 +16,23 @@ class SignalCardTestFixtureTests(unittest.TestCase):
             self.assertEqual(signal["signal_scope"], "POSITION")
             self.assertEqual(signal["calibration_status"], "TEST")
             with Image.open(path) as image:
-                self.assertEqual(image.size, (1440, 2480))
+                self.assertEqual(image.size, (1440, 2520))
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    def test_trade_levels_are_not_repeated_inside_charts_or_lower_summary(self):
+        with patch.object(signal_card_v3, "_text", wraps=signal_card_v3._text) as draw_text:
+            path, _ = build_test_signal_card()
+        try:
+            labels = [str(call.args[2]) for call in draw_text.call_args_list if len(call.args) > 2]
+            self.assertNotIn("Mum verisi yok", labels)
+            self.assertNotIn("TRADE PLANI", labels)
+            self.assertNotIn("Giriş", labels)
+            self.assertNotIn("Stop", labels)
+            self.assertFalse(any(label.startswith(("GİRİŞ ", "STOP ", "H1 ")) for label in labels))
         finally:
             try:
                 os.remove(path)
