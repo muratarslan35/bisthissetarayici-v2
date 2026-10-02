@@ -63,6 +63,13 @@ def _frame(item, tf):
     return None
 
 
+def _last_rsi(df, period=14):
+    if df is None or "Close" not in df:
+        return None
+    values = rsi_wilder_series(df["Close"], period).dropna()
+    return float(values.iloc[-1]) if not values.empty else None
+
+
 def _rounded(draw, xy, radius=20, fill=PANEL, outline=None, width=1):
     draw.rounded_rectangle(xy, radius=radius, fill=fill, outline=outline, width=width)
 
@@ -167,7 +174,11 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
         # Use the available history up to a practical TradingView-like candle
         # density, with enough pixels left for readable wicks and bodies.
         max_bars = max(90, int(w / 7.5))
-    df = df.tail(max_bars).copy()
+    # Calculate RSI from all available source candles before limiting the
+    # visible candle count, then plot the matching tail on the same x-axis.
+    source_df = df.copy()
+    full_rsi = rsi_wilder_series(source_df["Close"], 14)
+    df = source_df.tail(max_bars).copy()
     geometry = chart_geometry(df, lookback=len(df))
     hi = float(pd.to_numeric(df["High"], errors="coerce").max())
     lo = float(pd.to_numeric(df["Low"], errors="coerce").min())
@@ -302,7 +313,7 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
 
     # RSI(14) panel; values are derived from the same displayed bars.
     draw.line((x, rsi_y, x + w, rsi_y), fill=GRID, width=1)
-    rsi = rsi_wilder_series(df["Close"], 14).tail(n)
+    rsi = full_rsi.tail(n)
     for level, color in ((70, RED), (50, GRID), (30, GREEN)):
         yy = rsi_y + (100 - level) / 100 * rsi_h
         line_color = GRID if level == 50 else (54, 71, 88)
@@ -315,7 +326,7 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
             rsi_pts.append((x + i * cw + cw * 0.5, rsi_y + (100 - float(value)) / 100 * rsi_h))
     if len(rsi_pts) > 1:
         draw.line(rsi_pts, fill=AMBER, width=3)
-    divergence = rsi_divergence(df)
+    divergence = rsi_divergence(source_df)
     dtype = divergence.get("type")
     dcolor = GREEN if dtype == "BULLISH" else RED if dtype == "BEARISH" else MUTED
     _text(draw, (x + 8, rsi_y + 5), f"{timeframe} RSI(14) {float(rsi.dropna().iloc[-1]):.1f} · {divergence.get('label')}", 13, dcolor, True)
@@ -405,7 +416,11 @@ def build_signal_card(signal, item, state=None):
 
     rs = _num(signal.get("relative_strength_percentile"))
     r15 = _num(signal.get("rsi_15m"))
-    r4 = _num(signal.get("rsi_4h"))
+    # Use the same 4H OHLC source as the displayed chart. The signal snapshot
+    # is only a fallback if the corresponding candles are unavailable.
+    r4 = _last_rsi(_frame(item, "4h"))
+    if r4 is None:
+        r4 = _num(signal.get("rsi_4h"))
     # The first row answers the trader's immediate decision questions.
     gap = 12
     mw = (W - 48 - gap * 5) / 6
