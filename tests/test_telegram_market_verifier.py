@@ -87,6 +87,40 @@ class TelegramMarketVerifierTests(unittest.TestCase):
     def test_request_gap_is_rate_safe(self):
         self.assertGreaterEqual(verifier.REQUEST_GAP_SECONDS, 60)
         self.assertLessEqual(verifier.REQUEST_GAP_SECONDS, 300)
+        self.assertGreaterEqual(verifier.RESPONSE_TIMEOUT, 30)
+        self.assertLessEqual(verifier.RESPONSE_TIMEOUT, 45)
+
+    def test_worker_removes_downloaded_image_after_processing(self):
+        handle, image_path = tempfile.mkstemp(prefix="bist-helper-image-", suffix=".img")
+        os.write(handle, b"temporary image bytes")
+        os.close(handle)
+        row = {"id": 1, "query_kind": "depth", "symbol": "THYAO"}
+
+        class StopWorker(Exception):
+            pass
+
+        class StopEvent:
+            def wait(self, seconds):
+                raise StopWorker()
+
+        def fake_async_run(coroutine):
+            coroutine.close()
+            return {"text": "", "image_path": image_path}
+
+        try:
+            with patch.object(verifier, "_claim_pending", return_value=row), \
+                 patch.object(verifier.asyncio, "run", side_effect=fake_async_run), \
+                 patch("depth_image_parser.parse_depth_image", return_value={
+                     "confirmation": False, "quality": {},
+                 }), \
+                 patch.object(verifier, "_finish"), \
+                 patch.object(verifier.threading, "Event", StopEvent):
+                with self.assertRaises(StopWorker):
+                    verifier._worker()
+            self.assertFalse(os.path.exists(image_path))
+        finally:
+            if os.path.exists(image_path):
+                os.unlink(image_path)
 
     def test_source_ban_persists_and_prevents_new_claims(self):
         now = datetime(2026, 9, 28, 10, 30, tzinfo=ZoneInfo("Europe/Istanbul"))

@@ -8,17 +8,20 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 
 from PIL import Image, ImageEnhance, ImageFilter
 
 
 CANVAS = (1536, 1024)
 TESSERACT = os.getenv("EXTERNAL_VERIFY_TESSERACT", "tesseract")
+OCR_TIMEOUT_SECONDS = min(45, max(10, int(os.getenv("EXTERNAL_VERIFY_OCR_TIMEOUT", "25"))))
 
 
-def _ocr(image, box, psm=6, whitelist=None):
+def _ocr(image, box, psm=6, whitelist=None, upscale=True):
     crop = image.crop(box)
-    crop = crop.resize((crop.width * 2, crop.height * 2))
+    if upscale:
+        crop = crop.resize((crop.width * 2, crop.height * 2))
     crop = ImageEnhance.Contrast(crop).enhance(1.4)
     crop = crop.filter(ImageFilter.SHARPEN)
     with tempfile.TemporaryDirectory(prefix="bist-depth-ocr-") as folder:
@@ -27,9 +30,18 @@ def _ocr(image, box, psm=6, whitelist=None):
         command = [TESSERACT, source, "stdout", "--psm", str(psm), "-l", "eng"]
         if whitelist:
             command.extend(["-c", f"tessedit_char_whitelist={whitelist}"])
-        result = subprocess.run(
-            command, capture_output=True, text=True, timeout=12, check=False
-        )
+        started = time.monotonic()
+        try:
+            result = subprocess.run(
+                command, capture_output=True, text=True,
+                timeout=OCR_TIMEOUT_SECONDS, check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            elapsed = time.monotonic() - started
+            raise RuntimeError(
+                f"tesseract timeout after {elapsed:.1f}s (psm={psm}, "
+                f"region={crop.width}x{crop.height})"
+            ) from exc
         if result.returncode != 0:
             raise RuntimeError(f"tesseract failed: {result.stderr.strip()[:200]}")
         return result.stdout.strip()
@@ -81,7 +93,7 @@ def _parse_header(image):
 
 
 def _parse_depth(image, current_price):
-    text = _ocr(image, (0, 150, 765, 725), psm=6)
+    text = _ocr(image, (0, 150, 765, 725), psm=6, upscale=False)
     levels = []
     raw_levels = []
     anomalies = []
@@ -123,7 +135,7 @@ def _parse_depth(image, current_price):
 
 
 def _parse_history(image):
-    text = _ocr(image, (770, 150, 1536, 1024), psm=6)
+    text = _ocr(image, (770, 150, 1536, 1024), psm=6, upscale=False)
     trades = []
     pattern = re.compile(
         r"^(\d{2}:\d{2}:\d{2})\s+([0-9]+(?:[.,][0-9]+)?)[^\s]*\s+"
@@ -170,10 +182,14 @@ def _parse_theoretical(image):
     }
 
 
-def parse_depth_image(image_bytes, expected_symbol=None):
+def parse_depth_image(image_source, expected_symbol=None):
     if not shutil.which(TESSERACT):
         raise RuntimeError("tesseract executable is not installed")
-    image = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize(CANVAS)
+    source = image_source
+    if isinstance(source, (bytes, bytearray, memoryview)):
+        source = io.BytesIO(source)
+    with Image.open(source) as original:
+        image = original.convert("RGB").resize(CANVAS)
     header = _parse_header(image)
     levels, raw_levels, anomalies, totals, depth_ocr = _parse_depth(
         image, header.get("last_price")
