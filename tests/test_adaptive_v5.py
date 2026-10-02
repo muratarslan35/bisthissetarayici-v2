@@ -84,7 +84,7 @@ class SignalCardTests(unittest.TestCase):
             self.assertTrue(Path(path).exists())
             self.assertGreater(Path(path).stat().st_size, 20_000)
             with Image.open(path) as card:
-                self.assertEqual(card.size, (1440, 2480))
+                self.assertEqual(card.size, (1440, 2520))
         finally:
             try:
                 os.remove(path)
