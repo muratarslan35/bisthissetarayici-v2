@@ -60,6 +60,7 @@ class SignalCardTestFixtureTests(unittest.TestCase):
             self.assertLess(chart_boxes[0][1], chart_boxes[1][1])
             self.assertEqual(chart_boxes[0][0], chart_boxes[1][0])
             self.assertEqual(chart_boxes[0][2], chart_boxes[1][2])
+            self.assertTrue(all(call.kwargs.get("show_rsi") for call in chart.call_args_list))
         finally:
             try:
                 os.remove(path)
