@@ -10,7 +10,7 @@ from professional_technical_engine import chart_geometry, most_series, rsi_diver
 
 TR_TZ = ZoneInfo("Europe/Istanbul")
 
-W, H = 1440, 2520
+W, H = 1920, 1640
 BG = (10, 20, 34)
 PANEL = (20, 38, 60)
 PANEL2 = (25, 48, 75)
@@ -372,33 +372,43 @@ def build_signal_card(signal, item, state=None):
         _metric(draw, 24 + i * (mw + gap), 144, mw, *values)
 
     tf = "4h" if scope == "POSITION" else "15m"
+    chart_top, chart_bottom = 258, 950
+    bottom_top = 970
     chart_df = _frame(item, tf)
-    _draw_candle_chart(
-        draw,
-        chart_df,
-        (24, 258, W - 24, 1120),
-        signal,
-        title=f"{('4 SAATLİK' if tf == '4h' else '15 DAKİKALIK')} TRADE GRAFİĞİ",
-        timeframe="4H" if tf == "4h" else "15M",
-        max_bars=90,
-        show_rsi=True,
-    )
-
-    # Position cards also carry a denser 1H execution view in the same image.
-    bottom_top = 1140
     if scope == "POSITION":
+        midpoint = W / 2
+        _draw_candle_chart(
+            draw,
+            chart_df,
+            (24, chart_top, midpoint - 10, chart_bottom),
+            signal,
+            title="4 SAATLİK TRADE GRAFİĞİ",
+            timeframe="4H",
+            max_bars=90,
+            show_rsi=True,
+        )
         hourly_df = _frame(item, "1h")
         _draw_candle_chart(
             draw,
             hourly_df,
-            (24, 1140, W - 24, 1880),
+            (midpoint + 10, chart_top, W - 24, chart_bottom),
             signal,
-            title="1 SAATLİK YAKIN PLAN · GİRİŞ ZAMANLAMASI",
+            title="1 SAATLİK TRADE GRAFİĞİ",
             timeframe="1H",
-            max_bars=120,
+            max_bars=90,
             show_rsi=False,
         )
-        bottom_top = 1900
+    else:
+        _draw_candle_chart(
+            draw,
+            chart_df,
+            (24, chart_top, W - 24, chart_bottom),
+            signal,
+            title="15 DAKİKALIK TRADE GRAFİĞİ",
+            timeframe="15M",
+            max_bars=90,
+            show_rsi=True,
+        )
 
     # The upper KPI row already shows entry, stop, and target 1. The wider
     # lower section is reserved for unique market context, evidence, and risk.
@@ -406,7 +416,7 @@ def build_signal_card(signal, item, state=None):
     _rounded(draw, bottom, 20, fill=PANEL, outline=GRID)
     _text(draw, (48, bottom_top + 22), "SİNYALİ OKU · TEYİTLER VE TAKİP", 27, WHITE, True)
 
-    market_box = (44, bottom_top + 78, 332, H - 132)
+    market_box = (44, bottom_top + 78, 448, H - 132)
     _rounded(draw, market_box, 16, fill=(15, 30, 49), outline=GRID)
     _text(draw, (62, bottom_top + 96), "ANLIK DURUM", 20, MUTED, True)
     tech = [
@@ -415,7 +425,7 @@ def build_signal_card(signal, item, state=None):
         ("GÜNLÜK", "-" if day is None else f"%{day:.2f}", GREEN if (day or 0) >= 0 else RED),
         ("RVOL", "-" if rvol is None else f"{rvol:.2f}×", BLUE),
     ]
-    mini_gap, mini_h = 10, 142
+    mini_gap, mini_h = 12, 150
     mini_w = (market_box[2] - market_box[0] - 36 - mini_gap) / 2
     for i, (label, value, color) in enumerate(tech):
         _mini_kpi(
@@ -425,42 +435,48 @@ def build_signal_card(signal, item, state=None):
             mini_w, mini_h, label, value, color,
         )
 
-    evidence_box = (350, bottom_top + 78, 1010, H - 132)
+    evidence_box = (466, bottom_top + 78, 1290, H - 132)
     _rounded(draw, evidence_box, 16, fill=(15, 30, 49), outline=GRID)
-    _text(draw, (372, bottom_top + 96), "NEDEN SİNYAL?", 23, WHITE, True)
+    _text(draw, (evidence_box[0] + 22, bottom_top + 96), "NEDEN SİNYAL?", 23, WHITE, True)
     confirmations = list(signal.get("technical_confirmations") or [])
     if not confirmations:
         confirmations = list(signal.get("reasons") or [])
     elif bot_support:
         evidence = "Bot destekli: teorik eşleşme teyidi" if bot_support.get("evidence") == "TEORIK" else "Bot destekli: derinlik teyidi"
         confirmations.insert(0, evidence)
+    evidence_text_x = evidence_box[0] + 76
     yy = bottom_top + 146
     for index, evidence in enumerate(confirmations[:5]):
         if index:
-            draw.line((372, yy - 10, evidence_box[2] - 22, yy - 10), fill=GRID, width=1)
-        _rounded(draw, (372, yy, 407, yy + 35), 12, fill=(24, 58, 53), outline=(33, 99, 80))
-        _text(draw, (389, yy + 17), "✓", 21, GREEN, True, "mm")
-        yy = _wrapped(draw, (425, yy + 2), evidence, 550, 20, TEXT, False, 2, 5) + 14
+            draw.line((evidence_box[0] + 22, yy - 10, evidence_box[2] - 22, yy - 10), fill=GRID, width=1)
+        _rounded(draw, (evidence_box[0] + 22, yy, evidence_box[0] + 57, yy + 35), 12, fill=(24, 58, 53), outline=(33, 99, 80))
+        _text(draw, (evidence_box[0] + 39, yy + 17), "✓", 21, GREEN, True, "mm")
+        yy = _wrapped(
+            draw, (evidence_text_x, yy + 2), evidence,
+            evidence_box[2] - evidence_text_x - 22, 24, TEXT, False, 2, 6,
+        ) + 14
 
     warnings = list(signal.get("technical_warnings") or [])
-    risk_box = (1028, bottom_top + 78, W - 44, H - 132)
+    risk_box = (1308, bottom_top + 78, W - 44, H - 132)
+    risk_text_x = risk_box[0] + 24
+    risk_text_w = risk_box[2] - risk_text_x - 24
     if warnings:
         _rounded(draw, risk_box, 16, fill=(54, 38, 31), outline=AMBER, width=2)
-        _text(draw, (1052, bottom_top + 102), "TAKİP EDİLECEK RİSK", 21, AMBER, True)
-        _rounded(draw, (1052, bottom_top + 151, 1340, bottom_top + 191), 12, fill=(83, 54, 36))
-        _text(draw, (1068, bottom_top + 171), "DİKKAT", 16, AMBER, True, "lm")
+        _text(draw, (risk_text_x, bottom_top + 102), "TAKİP EDİLECEK RİSK", 23, AMBER, True)
+        _rounded(draw, (risk_text_x, bottom_top + 151, risk_box[2] - 24, bottom_top + 191), 12, fill=(83, 54, 36))
+        _text(draw, (risk_text_x + 16, bottom_top + 171), "DİKKAT", 17, AMBER, True, "lm")
         ry = bottom_top + 220
         for warning in warnings[:2]:
-            _text(draw, (1054, ry), "•", 22, AMBER, True)
-            ry = _wrapped(draw, (1080, ry), warning, 290, 19, TEXT, False, 3, 5) + 16
-        _wrapped(draw, (1052, H - 190), "Giriş kararında bu koşulu yeniden kontrol et.", 300, 18, MUTED, False, 2, 6)
+            _text(draw, (risk_text_x + 2, ry), "•", 24, AMBER, True)
+            ry = _wrapped(draw, (risk_text_x + 28, ry), warning, risk_text_w - 32, 22, TEXT, False, 3, 6) + 16
+        _wrapped(draw, (risk_text_x, H - 190), "Giriş kararında bu koşulu yeniden kontrol et.", risk_text_w, 19, MUTED, False, 2, 6)
     else:
         _rounded(draw, risk_box, 16, fill=(24, 52, 48), outline=GREEN, width=2)
-        _text(draw, (1052, bottom_top + 102), "RİSK DURUMU", 21, GREEN, True)
-        _rounded(draw, (1052, bottom_top + 151, 1340, bottom_top + 191), 12, fill=(30, 75, 58))
-        _text(draw, (1068, bottom_top + 171), "YAPISAL VETO YOK", 16, GREEN, True, "lm")
-        _wrapped(draw, (1052, bottom_top + 222), "Mevcut sinyalde ek bir teknik uyarı oluşmadı.", 300, 22, TEXT, False, 4, 8)
-        _wrapped(draw, (1052, H - 190), "İşlem planındaki stop seviyesini koru.", 300, 18, MUTED, False, 2, 6)
+        _text(draw, (risk_text_x, bottom_top + 102), "RİSK DURUMU", 23, GREEN, True)
+        _rounded(draw, (risk_text_x, bottom_top + 151, risk_box[2] - 24, bottom_top + 191), 12, fill=(30, 75, 58))
+        _text(draw, (risk_text_x + 16, bottom_top + 171), "YAPISAL VETO YOK", 17, GREEN, True, "lm")
+        _wrapped(draw, (risk_text_x, bottom_top + 222), "Mevcut sinyalde ek bir teknik uyarı oluşmadı.", risk_text_w, 24, TEXT, False, 4, 8)
+        _wrapped(draw, (risk_text_x, H - 190), "İşlem planındaki stop seviyesini koru.", risk_text_w, 19, MUTED, False, 2, 6)
 
     # Stable color contract, printed on every Telegram card.
     legend = [
@@ -474,10 +490,11 @@ def build_signal_card(signal, item, state=None):
     legend_y = H - 82
     _text(draw, (30, legend_y - 25), "ÇİZGİ RENKLERİ", 13, MUTED, True)
     xx = 30
+    legend_step = (W - 60) / len(legend)
     for color, label in legend:
         draw.line((xx, legend_y, xx + 25, legend_y), fill=color, width=5)
         _text(draw, (xx + 34, legend_y), label, 12, TEXT, True, "lm")
-        xx += 190
+        xx += legend_step
 
     now = datetime.now(TR_TZ).strftime("%d.%m.%Y %H:%M:%S")
     _text(draw, (30, H - 18), "Ücretsiz OHLCV · Order-block/FVG mum türevidir, L2 emir defteri değildir.", 12, MUTED, False, "lb")
