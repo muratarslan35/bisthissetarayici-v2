@@ -38,6 +38,11 @@ class SignalCardTestFixtureTests(unittest.TestCase):
             self.assertEqual(labels.count("SİNYAL GÜCÜ"), 1)
             self.assertFalse(any(label.startswith(("4H DESTEK", "4H DİRENÇ")) for label in labels))
             self.assertFalse(any(label.startswith(("GİRİŞ ", "STOP ", "H1 ")) for label in labels))
+            self.assertTrue(any(label.startswith("MOST 4H ·") and "YUKARI" in label for label in labels))
+            self.assertTrue(any(label.startswith("MOST 1H ·") and "YUKARI" in label for label in labels))
+            self.assertTrue(any(label.startswith("KANAL ·") for label in labels))
+            self.assertFalse(any(label.startswith("KANAL · KANAL") for label in labels))
+            self.assertFalse(any("EMA20" in label or "EMA50" in label for label in labels))
         finally:
             try:
                 os.remove(path)
@@ -58,6 +63,16 @@ class SignalCardTestFixtureTests(unittest.TestCase):
                 os.remove(path)
             except OSError:
                 pass
+
+    def test_channel_position_and_triangle_detection_are_data_driven(self):
+        channel = {"lower": [90, 90], "middle": [100, 100], "upper": [110, 110]}
+        self.assertIn("ALT BANT", signal_card_v3._channel_position(91, channel)[0])
+        self.assertIn("ORTA BANT", signal_card_v3._channel_position(100, channel)[0])
+        self.assertIn("ÜST BANT", signal_card_v3._channel_position(109, channel)[0])
+        converging = {"trend_lines": {"upper": [110, 104], "lower": [90, 96]}}
+        self.assertEqual(signal_card_v3._triangle_shape(converging), "SİMETRİK ÜÇGEN")
+        diverging = {"trend_lines": {"upper": [110, 115], "lower": [90, 84]}}
+        self.assertIsNone(signal_card_v3._triangle_shape(diverging))
 
 
 if __name__ == "__main__":
