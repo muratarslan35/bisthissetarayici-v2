@@ -35,6 +35,8 @@ class SignalCardTestFixtureTests(unittest.TestCase):
             self.assertNotIn("ANLIK DURUM", labels)
             self.assertNotIn("CANLI FİYAT", labels)
             self.assertNotIn("RSI · 1G", labels)
+            self.assertNotIn("NEDEN SİNYAL?", labels)
+            self.assertIn("SİNYAL TEYİTLERİ", labels)
             self.assertEqual(labels.count("SİNYAL GÜCÜ"), 1)
             self.assertFalse(any(label.startswith(("4H DESTEK", "4H DİRENÇ")) for label in labels))
             self.assertFalse(any(label.startswith(("GİRİŞ ", "STOP ", "H1 ")) for label in labels))
