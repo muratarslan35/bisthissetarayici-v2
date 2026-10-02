@@ -137,7 +137,9 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     trend_end = _num(lower_trend[1]) if len(lower_trend) == 2 else None
     rising_trend = trend_start is not None and trend_end is not None and trend_end > trend_start
     visible_trend = [_num(v) for v in lower_trend if _num(v) is not None] if rising_trend else []
-    levels = [v for v in (sr4.get("support"), sr4.get("resistance")) if _num(v) is not None] + visible_trend
+    # Keep the 4H chart clear of support/resistance overlays.
+    sr_levels = [] if timeframe == "4H" else [sr4.get("support"), sr4.get("resistance")]
+    levels = [v for v in sr_levels if _num(v) is not None] + visible_trend
     if levels:
         hi = max(hi, max(levels))
         lo = min(lo, min(levels))
@@ -202,7 +204,7 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
         _draw_series_line(draw, vals, (218, 112, 255), x, w, lo, hi, y, price_h, 3)
         _text(draw, (x + 10, y + price_h - 26), f"MOST(9,2) {vals[-1]:.2f}", 13, (218, 112, 255), True)
 
-    structural_levels = (
+    structural_levels = () if timeframe == "4H" else (
         (sr4.get("support"), GREEN, f"{timeframe} DESTEK", True),
         (sr4.get("resistance"), RED, f"{timeframe} DİRENÇ", True),
     )
@@ -285,12 +287,6 @@ def _metric(draw, x, y, w, title, value, color=TEXT, subtitle=None):
         _text(draw, (x + 16, y + 77), subtitle, 14, MUTED)
 
 
-def _mini_kpi(draw, x, y, w, h, title, value, color=TEXT):
-    _rounded(draw, (x, y, x + w, y + h), 14, fill=PANEL2, outline=GRID)
-    _text(draw, (x + 12, y + 14), title, 13, MUTED, True)
-    _text(draw, (x + 12, y + 52), value, 25, color, True)
-
-
 def _wrapped(draw, xy, text, max_width, size=16, fill=TEXT, bold=False, max_lines=3, line_gap=5):
     words = str(text).split()
     lines, current = [], ""
@@ -328,8 +324,9 @@ def build_signal_card(signal, item, state=None):
     algo = str(signal.get("main_algorithm") or "").replace("_V3", "").replace("_", " ")
     score = _num(signal.get("score"), 0.0) or 0.0
     stage = (state or {}).get("stage") or ("ÇOK GÜÇLÜ" if score >= 90 else "GÜÇLÜ" if score >= 83 else "ADAY")
+    height = 2200 if scope == "POSITION" else H
 
-    img = Image.new("RGB", (W, H), BG)
+    img = Image.new("RGB", (W, height), BG)
     draw = ImageDraw.Draw(img)
 
     _rounded(draw, (24, 20, W - 24, 124), 22, fill=(18, 37, 60), outline=GRID)
@@ -340,23 +337,17 @@ def build_signal_card(signal, item, state=None):
     bot_support = signal.get("bot_support") or {}
     bot_badge = "BOT TEYİTLİ · " if bot_support else ""
     _text(draw, (48, 89), f"{bot_badge}{algo.title()}  ·  {phase_tr}", 17, GREEN if bot_support else CYAN, True)
-    _text(draw, (W - 48, 39), f"{stage} · {score:.0f}/100", 27, _stage_color(stage), True, "ra")
-    _text(draw, (W - 48, 85), "PROFESYONEL YAPI MOTORU", 14, MUTED, True, "ra")
+    _text(draw, (W - 48, 65), "PROFESYONEL YAPI MOTORU", 14, MUTED, True, "ra")
 
     entry = _num(signal.get("entry_price"))
-    current = _num(signal.get("current_price"), entry)
     stop = _num(signal.get("stop_loss"))
     tp1 = _num(signal.get("tp1"))
     tp2 = _num(signal.get("tp2"))
     tp3 = _num(signal.get("tp3"))
 
     rs = _num(signal.get("relative_strength_percentile"))
-    rvol = _num(signal.get("session_rvol"))
     r15 = _num(signal.get("rsi_15m"))
     r4 = _num(signal.get("rsi_4h"))
-    r1 = _num(signal.get("rsi_1d"))
-    day = _num(signal.get("day_change_pct"))
-
     # The first row answers the trader's immediate decision questions.
     gap = 12
     mw = (W - 48 - gap * 5) / 6
@@ -372,15 +363,16 @@ def build_signal_card(signal, item, state=None):
         _metric(draw, 24 + i * (mw + gap), 144, mw, *values)
 
     tf = "4h" if scope == "POSITION" else "15m"
-    chart_top, chart_bottom = 258, 950
-    bottom_top = 970
+    chart_top = 258
     chart_df = _frame(item, tf)
     if scope == "POSITION":
-        midpoint = W / 2
+        chart_bottom = 930
+        hourly_top, hourly_bottom = 950, 1622
+        bottom_top = 1642
         _draw_candle_chart(
             draw,
             chart_df,
-            (24, chart_top, midpoint - 10, chart_bottom),
+            (24, chart_top, W - 24, chart_bottom),
             signal,
             title="4 SAATLİK TRADE GRAFİĞİ",
             timeframe="4H",
@@ -391,7 +383,7 @@ def build_signal_card(signal, item, state=None):
         _draw_candle_chart(
             draw,
             hourly_df,
-            (midpoint + 10, chart_top, W - 24, chart_bottom),
+            (24, hourly_top, W - 24, hourly_bottom),
             signal,
             title="1 SAATLİK TRADE GRAFİĞİ",
             timeframe="1H",
@@ -399,6 +391,8 @@ def build_signal_card(signal, item, state=None):
             show_rsi=False,
         )
     else:
+        chart_bottom = 950
+        bottom_top = 970
         _draw_candle_chart(
             draw,
             chart_df,
@@ -410,32 +404,13 @@ def build_signal_card(signal, item, state=None):
             show_rsi=True,
         )
 
-    # The upper KPI row already shows entry, stop, and target 1. The wider
-    # lower section is reserved for unique market context, evidence, and risk.
-    bottom = (24, bottom_top, W - 24, H - 112)
+    # Entry, stop, and target are already in the top KPI row. Use all lower
+    # space for signal evidence and risk, without a repeated lower-left panel.
+    bottom = (24, bottom_top, W - 24, height - 112)
     _rounded(draw, bottom, 20, fill=PANEL, outline=GRID)
     _text(draw, (48, bottom_top + 22), "SİNYALİ OKU · TEYİTLER VE TAKİP", 27, WHITE, True)
 
-    market_box = (44, bottom_top + 78, 448, H - 132)
-    _rounded(draw, market_box, 16, fill=(15, 30, 49), outline=GRID)
-    _text(draw, (62, bottom_top + 96), "ANLIK DURUM", 20, MUTED, True)
-    tech = [
-        ("CANLI FİYAT", "-" if current is None else f"{current:.2f}", CYAN),
-        ("RSI · 1G", "-" if r1 is None else f"{r1:.1f}", AMBER),
-        ("GÜNLÜK", "-" if day is None else f"%{day:.2f}", GREEN if (day or 0) >= 0 else RED),
-        ("RVOL", "-" if rvol is None else f"{rvol:.2f}×", BLUE),
-    ]
-    mini_gap, mini_h = 12, 150
-    mini_w = (market_box[2] - market_box[0] - 36 - mini_gap) / 2
-    for i, (label, value, color) in enumerate(tech):
-        _mini_kpi(
-            draw,
-            market_box[0] + 12 + (i % 2) * (mini_w + mini_gap),
-            bottom_top + 142 + (i // 2) * (mini_h + mini_gap),
-            mini_w, mini_h, label, value, color,
-        )
-
-    evidence_box = (466, bottom_top + 78, 1290, H - 132)
+    evidence_box = (44, bottom_top + 78, 1260, height - 132)
     _rounded(draw, evidence_box, 16, fill=(15, 30, 49), outline=GRID)
     _text(draw, (evidence_box[0] + 22, bottom_top + 96), "NEDEN SİNYAL?", 23, WHITE, True)
     confirmations = list(signal.get("technical_confirmations") or [])
@@ -457,7 +432,7 @@ def build_signal_card(signal, item, state=None):
         ) + 14
 
     warnings = list(signal.get("technical_warnings") or [])
-    risk_box = (1308, bottom_top + 78, W - 44, H - 132)
+    risk_box = (1280, bottom_top + 78, W - 44, height - 132)
     risk_text_x = risk_box[0] + 24
     risk_text_w = risk_box[2] - risk_text_x - 24
     if warnings:
@@ -469,14 +444,14 @@ def build_signal_card(signal, item, state=None):
         for warning in warnings[:2]:
             _text(draw, (risk_text_x + 2, ry), "•", 24, AMBER, True)
             ry = _wrapped(draw, (risk_text_x + 28, ry), warning, risk_text_w - 32, 22, TEXT, False, 3, 6) + 16
-        _wrapped(draw, (risk_text_x, H - 190), "Giriş kararında bu koşulu yeniden kontrol et.", risk_text_w, 19, MUTED, False, 2, 6)
+        _wrapped(draw, (risk_text_x, height - 190), "Giriş kararında bu koşulu yeniden kontrol et.", risk_text_w, 19, MUTED, False, 2, 6)
     else:
         _rounded(draw, risk_box, 16, fill=(24, 52, 48), outline=GREEN, width=2)
         _text(draw, (risk_text_x, bottom_top + 102), "RİSK DURUMU", 23, GREEN, True)
         _rounded(draw, (risk_text_x, bottom_top + 151, risk_box[2] - 24, bottom_top + 191), 12, fill=(30, 75, 58))
         _text(draw, (risk_text_x + 16, bottom_top + 171), "YAPISAL VETO YOK", 17, GREEN, True, "lm")
         _wrapped(draw, (risk_text_x, bottom_top + 222), "Mevcut sinyalde ek bir teknik uyarı oluşmadı.", risk_text_w, 24, TEXT, False, 4, 8)
-        _wrapped(draw, (risk_text_x, H - 190), "İşlem planındaki stop seviyesini koru.", risk_text_w, 19, MUTED, False, 2, 6)
+        _wrapped(draw, (risk_text_x, height - 190), "İşlem planındaki stop seviyesini koru.", risk_text_w, 19, MUTED, False, 2, 6)
 
     # Stable color contract, printed on every Telegram card.
     legend = [
@@ -487,7 +462,7 @@ def build_signal_card(signal, item, state=None):
         (RED, "Direnç"),
         (TEAL, "Yükselen trend"),
     ]
-    legend_y = H - 82
+    legend_y = height - 82
     _text(draw, (30, legend_y - 25), "ÇİZGİ RENKLERİ", 13, MUTED, True)
     xx = 30
     legend_step = (W - 60) / len(legend)
@@ -497,8 +472,8 @@ def build_signal_card(signal, item, state=None):
         xx += legend_step
 
     now = datetime.now(TR_TZ).strftime("%d.%m.%Y %H:%M:%S")
-    _text(draw, (30, H - 18), "Ücretsiz OHLCV · Order-block/FVG mum türevidir, L2 emir defteri değildir.", 12, MUTED, False, "lb")
-    _text(draw, (W - 30, H - 18), now, 12, MUTED, False, "rb")
+    _text(draw, (30, height - 18), "Ücretsiz OHLCV · Order-block/FVG mum türevidir, L2 emir defteri değildir.", 12, MUTED, False, "lb")
+    _text(draw, (W - 30, height - 18), now, 12, MUTED, False, "rb")
 
     out_dir = Path("cards")
     out_dir.mkdir(exist_ok=True)
