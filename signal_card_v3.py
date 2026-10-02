@@ -205,8 +205,8 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
         upper_points = channel_points(channel_paths["upper"])
         middle_points = channel_points(channel_paths["middle"])
         lower_points = channel_points(channel_paths["lower"])
-        draw.polygon(upper_points + list(reversed(middle_points)), fill=(15, 31, 45))
-        draw.polygon(middle_points + list(reversed(lower_points)), fill=(15, 38, 43))
+        draw.polygon(upper_points + list(reversed(middle_points)), fill=(21, 42, 56))
+        draw.polygon(middle_points + list(reversed(lower_points)), fill=(17, 48, 49))
 
     for i in range(6):
         yy = y + i * price_h / 5
