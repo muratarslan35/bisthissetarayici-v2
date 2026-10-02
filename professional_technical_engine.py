@@ -209,15 +209,33 @@ def most_series(df, period=9, percent=2.0):
 def rsi_wilder_series(series, period=14):
     """TradingView-compatible Wilder/RMA RSI series."""
     values = pd.to_numeric(series, errors="coerce").astype(float)
-    delta = values.diff()
-    gain = delta.clip(lower=0.0)
-    loss = -delta.clip(upper=0.0)
-    avg_gain = gain.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
-    rs = avg_gain / avg_loss.replace(0.0, np.nan)
-    rsi = 100.0 - (100.0 / (1.0 + rs))
-    rsi = rsi.where(avg_loss.ne(0.0), 100.0)
-    return rsi.where(~(avg_gain.eq(0.0) & avg_loss.eq(0.0)), 50.0)
+    source = values.to_numpy(dtype=float)
+    valid_positions = np.flatnonzero(np.isfinite(source))
+    result = np.full(len(source), np.nan, dtype=float)
+    if len(valid_positions) <= period:
+        return pd.Series(result, index=values.index, name=series.name)
+
+    valid_values = source[valid_positions]
+    changes = np.diff(valid_values)
+    gains = np.maximum(changes, 0.0)
+    losses = np.maximum(-changes, 0.0)
+    avg_gain = float(gains[:period].mean())
+    avg_loss = float(losses[:period].mean())
+
+    def value_from_averages(gain, loss):
+        if loss == 0.0:
+            return 100.0 if gain > 0.0 else 50.0
+        if gain == 0.0:
+            return 0.0
+        relative_strength = gain / loss
+        return 100.0 - (100.0 / (1.0 + relative_strength))
+
+    result[valid_positions[period]] = value_from_averages(avg_gain, avg_loss)
+    for i in range(period, len(changes)):
+        avg_gain = ((avg_gain * (period - 1)) + gains[i]) / period
+        avg_loss = ((avg_loss * (period - 1)) + losses[i]) / period
+        result[valid_positions[i + 1]] = value_from_averages(avg_gain, avg_loss)
+    return pd.Series(result, index=values.index, name=series.name)
 
 
 def rsi_divergence(df, period=14, radius=2, max_bars=30):
