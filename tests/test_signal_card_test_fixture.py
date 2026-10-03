@@ -185,7 +185,7 @@ class SignalCardTestFixtureTests(unittest.TestCase):
             labels = [str(call.args[2]) for call in draw_text.call_args_list if len(call.args) > 2]
             self.assertEqual(labels.count("SİMETRİK ÜÇGEN"), 2)
             self.assertIn("ÜÇGEN / TREND SIKIŞMASI", labels)
-            self.assertEqual(paths.call_count, 12)  # 3 channel bands + 2 triangle rails + MOST per chart
+            self.assertEqual(paths.call_count, 14)  # 3 channel bands + 2 triangle rails + EMA/MOST per chart
         finally:
             try:
                 os.remove(path)
@@ -196,15 +196,33 @@ class SignalCardTestFixtureTests(unittest.TestCase):
         with patch.object(signal_card_v3, "_draw_price_path", wraps=signal_card_v3._draw_price_path) as paths:
             path, _ = build_test_signal_card()
         try:
-            most_calls = [call for call in paths.call_args_list if call.args[2] == signal_card_v3.MOST_LINE]
-            self.assertEqual(len(most_calls), 2)
-            self.assertTrue(all(len(call.args[1]) >= 70 for call in most_calls))
-            self.assertTrue(all(call.kwargs.get("width") == 4 for call in most_calls))
+            ema_calls = [call for call in paths.call_args_list if call.args[2] == signal_card_v3.MOST_EMA_COLOR]
+            stop_calls = [call for call in paths.call_args_list if call.args[2] == signal_card_v3.MOST_STOP_COLOR]
+            self.assertEqual(len(ema_calls), 2)
+            self.assertEqual(len(stop_calls), 2)
+            self.assertTrue(all(len(call.args[1]) >= 70 for call in ema_calls + stop_calls))
+            self.assertTrue(all(call.kwargs.get("width") == 4 for call in ema_calls))
+            self.assertTrue(all(call.kwargs.get("width") == 3 for call in stop_calls))
         finally:
             try:
                 os.remove(path)
             except OSError:
                 pass
+
+    def test_most_pair_matches_six_period_one_percent_tradingview_settings(self):
+        close = pd.Series(40 + np.arange(48, dtype=float) * 0.15 + np.sin(np.arange(48) / 3))
+        frame = pd.DataFrame({
+            "Open": close - 0.1,
+            "High": close + 0.4,
+            "Low": close - 0.4,
+            "Close": close,
+            "Volume": np.full(len(close), 100_000.0),
+        })
+        lines = signal_card_v3.most_components(frame, period=6, percent=1.0)
+        expected_ema = close.ewm(span=6, adjust=False).mean()
+        expected_stop = signal_card_v3.most(frame, period=6, percent=1.0)["level"]
+        self.assertTrue(np.allclose(lines["ema"].to_numpy(), expected_ema.to_numpy()))
+        self.assertAlmostEqual(float(lines["most"].iloc[-1]), expected_stop, places=4)
 
 
 if __name__ == "__main__":
