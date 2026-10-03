@@ -1615,47 +1615,57 @@ def scanner_loop():
                 dashboard.SYSTEM_ACTIVE = False
 
                 if TRADING_V3_ENABLED:
-                    # Keep channel reporting on its own close schedule. The bot
-                    # POSITION report waits for a fresh daily close bar.
+                    # Both destinations wait for verified daily closes. Their
+                    # report contents and recipients remain scope-specific.
                     if (
-                        last_channel_report != now.date()
-                        and now.weekday() < 5
-                        and now.time() > BIST_CLOSE
-                    ):
-                        channel_report = build_v4_daily_report(scope="INTRADAY")
-                        if channel_report:
-                            send_to_channel(channel_report)
-                        last_channel_report = now.date()
-
-                    if (
-                        last_daily_report != now.date()
-                        and now.weekday() < 5
+                        now.weekday() < 5
                         and now.time() >= dtime(18, 15)
+                        and (last_channel_report != now.date() or last_daily_report != now.date())
                         and time.time() - last_eod_close_fetch_time >= 300
                     ):
                         position_symbols = get_open_trade_symbols(scope="POSITION")
+                        intraday_symbols = get_open_trade_symbols(scope="INTRADAY")
                         close_data = fetch_final_close_prices(
-                            sorted(position_symbols),
+                            sorted(position_symbols | intraday_symbols),
                             session_date=now.date(),
                         )
-                        persisted = persist_position_close_prices(
-                            close_data,
-                            session_date=now.date(),
+                        persisted_position = persist_position_close_prices(
+                            close_data, session_date=now.date(), scope="POSITION"
                         )
-                        missing = position_symbols - persisted
+                        persisted_intraday = persist_position_close_prices(
+                            close_data, session_date=now.date(), scope="INTRADAY"
+                        )
+                        missing_position = position_symbols - persisted_position
+                        missing_intraday = intraday_symbols - persisted_intraday
                         last_eod_close_fetch_time = time.time()
                         print(
                             "EOD_CLOSE_VERIFY "
                             f"date={now.date().isoformat()} "
-                            f"received={len(persisted)}/{len(position_symbols)} "
-                            f"missing={sorted(missing)}",
+                            f"position={len(persisted_position)}/{len(position_symbols)} "
+                            f"channel={len(persisted_intraday)}/{len(intraday_symbols)} "
+                            f"missing_position={sorted(missing_position)} "
+                            f"missing_channel={sorted(missing_intraday)}",
                             flush=True,
                         )
 
                         # Retry delayed/missing daily bars every five minutes.
-                        # At 19:00, missing quotes stay explicitly unverified;
-                        # the report never falls back to an old intraday value.
-                        if not missing or now.time() >= dtime(19, 0):
+                        # At 19:00 missing quotes are explicitly marked unverified.
+                        if (
+                            last_channel_report != now.date()
+                            and (not missing_intraday or now.time() >= dtime(19, 0))
+                        ):
+                            channel_report = build_v4_daily_report(
+                                scope="INTRADAY",
+                                verified_close_date=now.date(),
+                            )
+                            if channel_report:
+                                send_to_channel(channel_report)
+                            last_channel_report = now.date()
+
+                        if (
+                            last_daily_report != now.date()
+                            and (not missing_position or now.time() >= dtime(19, 0))
+                        ):
                             report = build_v4_daily_report(
                                 scope="POSITION",
                                 verified_close_date=now.date(),
