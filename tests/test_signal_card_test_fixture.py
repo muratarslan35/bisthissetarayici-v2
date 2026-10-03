@@ -75,7 +75,7 @@ class SignalCardTestFixtureTests(unittest.TestCase):
         try:
             labels = [str(call.args[2]) for call in draw_text.call_args_list if len(call.args) > 2]
             self.assertIn("YARDIMCI BOT TEYİDİ", labels)
-            self.assertIn("DERİNLİK · @borsabilgibot", labels)
+            self.assertNotIn("DERİNLİK · @borsabilgibot", labels)
             kpis = signal_card_v3._bot_kpis(support)
             self.assertEqual([kpi[0] for kpi in kpis], [
                 "TOPLAM ALIŞ", "TOPLAM SATIŞ", "ALIŞ BASKISI", "BASKIN ALICI", "BASKIN SATICI",
@@ -105,7 +105,7 @@ class SignalCardTestFixtureTests(unittest.TestCase):
             path, _ = build_test_signal_card({"bot_support": support})
         try:
             labels = [str(call.args[2]) for call in draw_text.call_args_list if len(call.args) > 2]
-            self.assertIn("TEORİK EŞLEŞME · @borsabilgibot", labels)
+            self.assertNotIn("TEORİK EŞLEŞME · @borsabilgibot", labels)
             kpis = signal_card_v3._bot_kpis(support)
             self.assertEqual([kpi[:2] for kpi in kpis], [
                 ("TEORİK FİYAT", "61,42 TL"),
