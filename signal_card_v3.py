@@ -6,7 +6,13 @@ import pandas as pd
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from professional_technical_engine import chart_geometry, most, rsi_divergence, rsi_wilder_series
+from professional_technical_engine import (
+    chart_geometry,
+    most,
+    most_series,
+    rsi_divergence,
+    rsi_wilder_series,
+)
 
 TR_TZ = ZoneInfo("Europe/Istanbul")
 
@@ -27,6 +33,7 @@ CHANNEL_MIDDLE = (130, 147, 169)
 CHANNEL_LOWER = (55, 151, 142)
 PATTERN_LINE = (226, 170, 100)
 WHITE = (255, 255, 255)
+MOST_LINE = (115, 164, 255)
 
 
 def _font(size, bold=False):
@@ -57,27 +64,27 @@ def _tr_number(value, decimals=0):
     return rendered.replace(",", "§").replace(".", ",").replace("§", ".")
 
 
-def _bot_evidence_lines(bot_support):
-    """Format only the helper-bot fields present in a confirmed payload."""
+def _bot_evidence_rows(bot_support):
+    """Group only available helper-bot measurements into compact report rows."""
     evidence = str(bot_support.get("evidence") or "").upper()
-    lines = []
+    rows = []
     if evidence == "TEORIK":
         price = _tr_number(bot_support.get("theoretical_price"), 2)
         quantity = _tr_number(bot_support.get("theoretical_quantity"))
         parts = []
         if price is not None:
-            parts.append(f"Teorik fiyat {price} TL")
+            parts.append(("TEORİK FİYAT", f"{price} TL"))
         if quantity is not None:
-            parts.append(f"eşleşebilir {quantity} lot")
+            parts.append(("EŞLEŞEBİLİR", f"{quantity} lot"))
         side = bot_support.get("unmatched_side")
         if side:
             side_label = {"BUY": "Alış", "SELL": "Satış"}.get(str(side).upper(), str(side))
-            parts.append(f"kalan taraf {side_label}")
+            parts.append(("KALAN TARAF", side_label))
         difference = _tr_number(bot_support.get("theoretical_difference_pct"), 2)
         if difference is not None:
-            parts.append(f"fiyat farkı %{difference}")
+            parts.append(("FİYAT FARKI", f"%{difference}"))
         if parts:
-            lines.append(" · ".join(parts))
+            rows.append(("EŞLEŞME", parts))
     elif evidence == "DERINLIK":
         price = _tr_number(bot_support.get("depth_price"), 2)
         volume = _tr_number(bot_support.get("market_volume"))
@@ -85,33 +92,33 @@ def _bot_evidence_lines(bot_support):
         pressure = _tr_number(bot_support.get("buy_pressure_pct"), 1)
         parts = []
         if price is not None:
-            parts.append(f"Fiyat {price} TL")
+            parts.append(("FİYAT", f"{price} TL"))
         if volume is not None:
-            parts.append(f"hacim {volume} lot")
+            parts.append(("HACİM", f"{volume} lot"))
         if ratio is not None:
-            parts.append(f"alış/satış {ratio}x")
+            parts.append(("ALIŞ / SATIŞ", f"{ratio}x"))
         if pressure is not None:
-            parts.append(f"alış baskısı %{pressure}")
+            parts.append(("ALIŞ BASKISI", f"%{pressure}"))
         if parts:
-            lines.append(" · ".join(parts))
+            rows.append(("PİYASA", parts))
 
         level = _tr_number(bot_support.get("valid_depth_levels"))
         buy = _tr_number(bot_support.get("buy_quantity"))
         sell = _tr_number(bot_support.get("sell_quantity"))
         buy_orders = _tr_number(bot_support.get("buy_orders"))
         sell_orders = _tr_number(bot_support.get("sell_orders"))
-        rows = _tr_number(bot_support.get("trade_rows"))
+        trade_rows = _tr_number(bot_support.get("trade_rows"))
         parts = []
         if level is not None:
-            parts.append(f"Kademe {level}/10")
+            parts.append(("KADEME", f"{level}/10"))
         if buy is not None:
-            parts.append(f"alış {buy} lot" + (f"/{buy_orders} emir" if buy_orders is not None else ""))
+            parts.append(("ALIŞ", f"{buy} lot" + (f" · {buy_orders} emir" if buy_orders is not None else "")))
         if sell is not None:
-            parts.append(f"satış {sell} lot" + (f"/{sell_orders} emir" if sell_orders is not None else ""))
-        if rows is not None:
-            parts.append(f"{rows} işlem satırı")
+            parts.append(("SATIŞ", f"{sell} lot" + (f" · {sell_orders} emir" if sell_orders is not None else "")))
+        if trade_rows is not None:
+            parts.append(("İŞLEM", f"{trade_rows} satır"))
         if parts:
-            lines.append(" · ".join(parts))
+            rows.append(("EMİR DEFTERİ", parts))
 
         buyer = bot_support.get("top_net_buyer")
         buyer_qty = _tr_number(bot_support.get("top_net_buyer_quantity"))
@@ -119,12 +126,29 @@ def _bot_evidence_lines(bot_support):
         seller_qty = _tr_number(bot_support.get("top_net_seller_quantity"))
         flows = []
         if buyer and buyer_qty is not None:
-            flows.append(f"net alıcı {buyer} +{buyer_qty}")
+            flows.append(("NET ALICI", f"{buyer} +{buyer_qty}"))
         if seller and seller_qty is not None:
-            flows.append(f"net satıcı {seller} −{seller_qty}")
+            flows.append(("NET SATICI", f"{seller} −{seller_qty}"))
         if flows:
-            lines.append("Kurum akışı · " + " · ".join(flows))
-    return lines
+            rows.append(("KURUM AKIŞI", flows))
+    return rows
+
+
+def _draw_bot_data_row(draw, y, heading, values):
+    """Draw a label-led data row without introducing another KPI card."""
+    _text(draw, (44, y + 2), heading, 14, MUTED, True)
+    x = 254
+    for index, (label, value) in enumerate(values):
+        if index:
+            draw.line((x, y + 3, x, y + 21), fill=GRID, width=1)
+            x += 13
+        _text(draw, (x, y + 1), label, 11, MUTED, True)
+        label_width = draw.textbbox((0, 0), label, font=_font(11, True))[2]
+        x += label_width + 6
+        value_color = GREEN if label in {"ALIŞ BASKISI", "NET ALICI"} else TEXT
+        _text(draw, (x, y), value, 15, value_color, True)
+        value_width = draw.textbbox((0, 0), value, font=_font(15, True))[2]
+        x += value_width + 18
 
 
 def _frame(item, tf):
@@ -256,7 +280,9 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     # visible candle count, then plot the matching tail on the same x-axis.
     source_df = df.copy()
     full_rsi = rsi_wilder_series(source_df["Close"], 14)
+    full_most = most_series(source_df, period=9, percent=2.0)
     df = source_df.tail(max_bars).copy()
+    visible_most = full_most.tail(len(df)) if full_most is not None else None
     geometry = chart_geometry(df, lookback=len(df))
     hi = float(pd.to_numeric(df["High"], errors="coerce").max())
     lo = float(pd.to_numeric(df["Low"], errors="coerce").min())
@@ -266,7 +292,8 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     triangle = _triangle_shape(geometry)
     channel_values = [value for band in channel.values() for value in (band or [])]
     triangle_values = [value for line in trend_lines.values() for value in (line or [])] if triangle else []
-    levels = channel_values + triangle_values
+    most_values = visible_most.dropna().astype(float).tolist() if visible_most is not None else []
+    levels = channel_values + triangle_values + most_values
     if levels:
         hi = max(hi, max(levels))
         lo = min(lo, min(levels))
@@ -351,6 +378,25 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
         if vmax > 0 and volume is not None:
             vh = float(volume.iloc[i]) / vmax * volume_h
             draw.rectangle((cx - cw * 0.28, volume_y + volume_h - vh, cx + cw * 0.28, volume_y + volume_h), fill=(*color[:3],))
+
+    # Plot the actual trailing-stop series calculated from the same OHLCV bars.
+    if visible_most is not None and visible_most.notna().sum() > 1:
+        most_points = [
+            float(value) if pd.notna(value) else np.nan
+            for value in visible_most
+        ]
+        _draw_price_path(
+            draw,
+            most_points,
+            MOST_LINE,
+            geometry_x,
+            geometry_right,
+            lo,
+            hi,
+            y,
+            price_h,
+            width=4,
+        )
 
     _text(draw, (x + w + 10, volume_y + 3), "HACİM", 12, MUTED, True, "lm")
 
@@ -585,11 +631,17 @@ def build_signal_card(signal, item, state=None):
         }.get(str(bot_support.get("evidence") or "").upper(), "TEYİTLİ VERİ")
         source = str(bot_support.get("source") or "YARDIMCI BOT")
         _text(draw, (W - 44, bottom_top + 193), f"{evidence_label} · {source}", 15, GREEN, True, "ra")
-        bot_lines = _bot_evidence_lines(bot_support)
-        if not bot_lines:
-            bot_lines = ["Teyit alındı; gösterilebilir sayısal ayrıntı bulunmuyor."]
-        for line_index, line in enumerate(bot_lines[:3]):
-            _wrapped(draw, (44, bottom_top + 224 + line_index * 29), line, W - 88, 17, TEXT, False, 1, 3)
+        bot_rows = _bot_evidence_rows(bot_support)
+        if not bot_rows:
+            _text(
+                draw,
+                (44, bottom_top + 230),
+                "Teyit alındı; gösterilebilir sayısal ayrıntı bulunmuyor.",
+                16,
+                MUTED,
+            )
+        for row_index, (heading, values) in enumerate(bot_rows[:3]):
+            _draw_bot_data_row(draw, bottom_top + 225 + row_index * 29, heading, values)
     else:
         _text(
             draw,
@@ -618,6 +670,8 @@ def build_signal_card(signal, item, state=None):
         (CHANNEL_LOWER, "KANAL ALT BANDI"),
     ]
     chart_frames = [chart_df] + ([hourly_df] if scope == "POSITION" else [])
+    if any(frame is not None and most_series(frame) is not None for frame in chart_frames):
+        legend.append((MOST_LINE, "MOST TAKİP ÇİZGİSİ"))
     if any(_triangle_shape(chart_geometry(frame)) for frame in chart_frames if frame is not None):
         legend.append((PATTERN_LINE, "ÜÇGEN / TREND SIKIŞMASI"))
     legend_y = height - 82
