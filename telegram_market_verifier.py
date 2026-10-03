@@ -381,6 +381,7 @@ def _depth_analysis(signal, parsed):
         sum(float(row.get("net_quantity") or 0) for row in negative_flows)
     )
     top_buyer = positive_flows[0] if positive_flows else {}
+    top_seller = negative_flows[0] if negative_flows else {}
     top_buyer_share_pct = (
         float(top_buyer.get("net_quantity") or 0) / institutional_buy_net * 100.0
         if institutional_buy_net else None
@@ -417,9 +418,14 @@ def _depth_analysis(signal, parsed):
         "institutional_buy_net": int(institutional_buy_net),
         "institutional_sell_net": int(institutional_sell_net),
         "top_net_buyer": top_buyer.get("institution"),
+        "top_net_buyer_quantity": int(top_buyer.get("net_quantity") or 0),
         "top_net_buyer_share_pct": (
             round(top_buyer_share_pct, 1) if top_buyer_share_pct is not None else None
         ),
+        "top_net_seller": top_seller.get("institution"),
+        "top_net_seller_quantity": abs(int(top_seller.get("net_quantity") or 0)),
+        "buy_orders": int(totals.get("buy_orders") or 0),
+        "sell_orders": int(totals.get("sell_orders") or 0),
         "institution_flow_rows": len(institution_flow),
     }
 
@@ -751,6 +757,8 @@ def gate_signal(signal):
             "source": "@borsabilgibot", "evidence": "TEORIK",
             "theoretical_price": theoretical.get("theoretical_price"),
             "theoretical_quantity": theoretical.get("theoretical_quantity"),
+            "theoretical_difference_pct": theoretical.get("theoretical_difference_pct"),
+            "unmatched_side": theoretical.get("unmatched_side"),
         }
         signal.setdefault("reasons", []).insert(0, "Bot destekli: teorik eşleşme teyidi")
         return signal
