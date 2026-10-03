@@ -3,7 +3,11 @@
 import argparse
 import json
 from pathlib import Path
+import sys
 import requests
+
+# Running a file under scripts/ sets sys.path[0] to that directory.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import CHANNEL_ID, REPORT_CHAT_IDS, TELEGRAM_TOKEN
 from market_data_hub import fetch_final_close_prices
