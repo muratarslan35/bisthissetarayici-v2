@@ -6,24 +6,35 @@ import pandas as pd
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from professional_technical_engine import chart_geometry, most_series, rsi_divergence, rsi_wilder_series
+from professional_technical_engine import (
+    chart_geometry,
+    most,
+    most_components,
+    rsi_divergence,
+    rsi_wilder_series,
+)
 
 TR_TZ = ZoneInfo("Europe/Istanbul")
 
-W, H = 1440, 2480
-BG = (10, 20, 34)
-PANEL = (20, 38, 60)
-PANEL2 = (25, 48, 75)
-GRID = (49, 70, 96)
-TEXT = (246, 249, 252)
-MUTED = (171, 188, 208)
-GREEN = (48, 210, 120)
-RED = (245, 86, 86)
-AMBER = (245, 181, 64)
-BLUE = (94, 158, 255)
-CYAN = (50, 212, 236)
-TEAL = (54, 211, 176)
+W, H = 1920, 1640
+BG = (8, 17, 30)
+PANEL = (17, 31, 49)
+PANEL2 = (24, 43, 64)
+GRID = (43, 60, 79)
+TEXT = (237, 243, 250)
+MUTED = (158, 177, 198)
+GREEN = (44, 197, 164)
+RED = (238, 105, 117)
+AMBER = (244, 190, 99)
+BLUE = (91, 169, 255)
+CYAN = (93, 198, 219)
+CHANNEL_UPPER = (99, 196, 189)
+CHANNEL_MIDDLE = (130, 147, 169)
+CHANNEL_LOWER = (55, 151, 142)
+PATTERN_LINE = (226, 170, 100)
 WHITE = (255, 255, 255)
+MOST_EMA_COLOR = (48, 215, 130)
+MOST_STOP_COLOR = (185, 119, 81)
 
 
 def _font(size, bold=False):
@@ -46,6 +57,83 @@ def _num(v, default=None):
         return default
 
 
+def _tr_number(value, decimals=0):
+    number = _num(value)
+    if number is None:
+        return None
+    rendered = f"{number:,.{decimals}f}"
+    return rendered.replace(",", "§").replace(".", ",").replace("§", ".")
+
+
+def _bot_kpis(bot_support):
+    """Return concise, evidence-backed KPI values for the auxiliary bot."""
+    evidence = str(bot_support.get("evidence") or "").upper()
+    if evidence == "TEORIK":
+        side = bot_support.get("unmatched_side")
+        side_label = {"BUY": "Alış", "SELL": "Satış"}.get(str(side or "").upper(), side or "-")
+        candidates = [
+            ("TEORİK FİYAT", _tr_number(bot_support.get("theoretical_price"), 2), "TL", CYAN),
+            ("EŞLEŞEBİLİR", _tr_number(bot_support.get("theoretical_quantity")), "lot", GREEN),
+            ("KALAN TARAF", side_label if side else None, "", AMBER),
+            ("FİYAT FARKI", _tr_number(bot_support.get("theoretical_difference_pct"), 2), "", BLUE),
+        ]
+        return [
+            (label, ("%" if label == "FİYAT FARKI" else "") + value + (f" {unit}" if unit else ""), "", color)
+            for label, value, unit, color in candidates if value is not None
+        ]
+
+    if evidence == "DERINLIK":
+        buy = _num(bot_support.get("buy_quantity"))
+        sell = _num(bot_support.get("sell_quantity"))
+        pressure = _num(bot_support.get("buy_pressure_pct"))
+        if pressure is None and buy is not None and sell is not None and buy + sell > 0:
+            pressure = (buy - sell) / (buy + sell) * 100.0
+        if pressure is None:
+            pressure_label, pressure_value, pressure_color = "BASKI", "Veri yok", MUTED
+        elif pressure > 0:
+            pressure_label, pressure_value, pressure_color = "ALIŞ BASKISI", f"%{_tr_number(pressure, 1)}", GREEN
+        elif pressure < 0:
+            pressure_label, pressure_value, pressure_color = "SATIŞ BASKISI", f"%{_tr_number(abs(pressure), 1)}", RED
+        else:
+            pressure_label, pressure_value, pressure_color = "DENGE", "%0,0", MUTED
+
+        buyer = str(bot_support.get("top_net_buyer") or "Veri yok")
+        seller = str(bot_support.get("top_net_seller") or "Veri yok")
+        buyer_quantity = _tr_number(bot_support.get("top_net_buyer_quantity"))
+        seller_quantity = _tr_number(bot_support.get("top_net_seller_quantity"))
+        return [
+            ("TOPLAM ALIŞ", f"{_tr_number(buy)} lot" if buy is not None else "Veri yok", "Emir defteri", GREEN),
+            ("TOPLAM SATIŞ", f"{_tr_number(sell)} lot" if sell is not None else "Veri yok", "Emir defteri", RED),
+            (pressure_label, pressure_value, "Net derinlik baskısı", pressure_color),
+            ("BASKIN ALICI", buyer, f"Net alış +{buyer_quantity} lot" if buyer_quantity is not None else "Net alış", GREEN),
+            ("BASKIN SATICI", seller, f"Net satış −{seller_quantity} lot" if seller_quantity is not None else "Net satış", AMBER),
+        ]
+    return []
+
+
+def _draw_bot_kpi_cards(draw, x, y, width, bot_support):
+    kpis = _bot_kpis(bot_support)
+    if not kpis:
+        return []
+    gap = 12
+    card_height = 78
+    card_width = (width - gap * (len(kpis) - 1)) / len(kpis)
+    boxes = []
+    for index, (label, value, subtitle, color) in enumerate(kpis):
+        left = x + index * (card_width + gap)
+        right = left + card_width
+        box = (left, y, right, y + card_height)
+        _rounded(draw, box, 10, fill=(17, 34, 52), outline=GRID)
+        draw.rounded_rectangle((left + 2, y + 2, right - 2, y + 5), radius=2, fill=color)
+        _text(draw, (left + 12, y + 10), label, 12, MUTED, True)
+        value_size = 19 if len(value) < 19 else 16
+        _text(draw, (left + 12, y + 31), value, value_size, color, True)
+        if subtitle:
+            _text(draw, (left + 12, y + 57), subtitle, 11, MUTED)
+        boxes.append(box)
+    return boxes
+
+
 def _frame(item, tf):
     try:
         df = item.get("tf", {}).get(tf, {}).get("df")
@@ -58,6 +146,13 @@ def _frame(item, tf):
     except Exception:
         pass
     return None
+
+
+def _last_rsi(df, period=14):
+    if df is None or "Close" not in df:
+        return None
+    values = rsi_wilder_series(df["Close"], period).dropna()
+    return float(values.iloc[-1]) if not values.empty else None
 
 
 def _rounded(draw, xy, radius=20, fill=PANEL, outline=None, width=1):
@@ -74,36 +169,74 @@ def _scale_price(price, low, high, top, height):
     return top + height - ((price - low) / (high - low)) * height
 
 
-def _ema(series, span):
-    return pd.to_numeric(series, errors="coerce").astype(float).ewm(span=span, adjust=False).mean()
-
-
-def _line_with_label(draw, x, w, yy, color, label, dash=False, width=2, label_y=None):
-    if dash:
-        for xx in range(int(x), int(x + w), 18):
-            draw.line((xx, yy, min(xx + 10, x + w), yy), fill=color, width=width)
-    else:
-        draw.line((x, yy, x + w, yy), fill=color, width=width)
-    label_y = yy if label_y is None else label_y
-    if abs(label_y - yy) > 2:
-        draw.line((x + w - 122, yy, x + w - 122, label_y), fill=color, width=1)
-    _rounded(draw, (x + w - 142, label_y - 13, x + w + 2, label_y + 13), 6, fill=(11, 23, 38))
-    _text(draw, (x + w - 8, label_y), label, 13, color, True, "rm")
-
-
-def _draw_series_line(draw, values, color, x, w, lo, hi, y, h, width=2):
-    if not values or any(_num(v) is None for v in values):
+def _draw_price_path(draw, values, color, x0, x1, low, high, top, height, width=2, dashed=False):
+    if len(values) < 2:
         return
-    pts = []
-    count = len(values)
-    for i, value in enumerate(values):
-        xx = x + (i / max(count - 1, 1)) * w
-        pts.append((xx, _scale_price(float(value), lo, hi, y, h)))
-    if len(pts) > 1:
-        draw.line(pts, fill=color, width=width)
+    points = [
+        (x0 + i * (x1 - x0) / (len(values) - 1), _scale_price(value, low, high, top, height))
+        for i, value in enumerate(values)
+    ]
+    if dashed:
+        for p0, p1 in zip(points, points[1:]):
+            steps = max(1, int(abs(p1[0] - p0[0]) / 10))
+            for step in range(0, steps, 2):
+                t0, t1 = step / steps, min(step + 1, steps) / steps
+                a = (p0[0] + (p1[0] - p0[0]) * t0, p0[1] + (p1[1] - p0[1]) * t0)
+                b = (p0[0] + (p1[0] - p0[0]) * t1, p0[1] + (p1[1] - p0[1]) * t1)
+                draw.line((a, b), fill=color, width=width)
+    else:
+        draw.line(points, fill=color, width=width)
 
 
-def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars=90, show_rsi=True):
+def _channel_position(close, channel):
+    try:
+        lower = float(channel["lower"][-1])
+        upper = float(channel["upper"][-1])
+        if upper <= lower:
+            return "KANAL HESAPLANAMADI", MUTED
+        ratio = (float(close) - lower) / (upper - lower)
+    except (KeyError, TypeError, ValueError, IndexError):
+        return "KANAL HESAPLANAMADI", MUTED
+    if ratio < 0:
+        return "KANAL ALTINDA", RED
+    if ratio <= 0.15:
+        return "ALT BANT · DESTEĞE YAKIN", GREEN
+    if ratio < 0.38:
+        return "ALT BANTTA", GREEN
+    if ratio < 0.62:
+        return "ORTA BANTTA", CYAN
+    if ratio < 0.85:
+        return "ÜST BANTTA", AMBER
+    if ratio <= 1:
+        return "ÜST BANT · UZAMIŞ", RED
+    return "KANAL ÜSTÜNDE", RED
+
+
+def _triangle_shape(geometry):
+    lines = geometry.get("trend_lines") or {}
+    upper, lower = lines.get("upper") or [], lines.get("lower") or []
+    if len(upper) != 2 or len(lower) != 2:
+        return None
+    gap_start, gap_end = upper[0] - lower[0], upper[1] - lower[1]
+    if gap_start <= 0 or gap_end <= 0 or gap_end >= gap_start * 0.88:
+        return None
+    upper_slope = (upper[1] - upper[0]) / max(abs(upper[0]), 1e-9)
+    lower_slope = (lower[1] - lower[0]) / max(abs(lower[0]), 1e-9)
+    threshold = 0.003
+    if upper_slope < -threshold and lower_slope > threshold:
+        return "SİMETRİK ÜÇGEN"
+    if abs(upper_slope) <= threshold and lower_slope > threshold:
+        return "YÜKSELEN ÜÇGEN"
+    if upper_slope < -threshold and abs(lower_slope) <= threshold:
+        return "ALÇALAN ÜÇGEN"
+    if upper_slope > 0 and lower_slope > 0:
+        return "YÜKSELEN SIKIŞMA"
+    if upper_slope < 0 and lower_slope < 0:
+        return "DÜŞEN SIKIŞMA"
+    return "TREND SIKIŞMASI"
+
+
+def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars=None, show_rsi=True):
     x0, y0, x1, y1 = box
     pad_l, pad_r, pad_t, pad_b = 66, 92, 64, 58
     x = x0 + pad_l
@@ -113,34 +246,43 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     reserved = 190 if show_rsi else 92
     price_h = h - reserved
     volume_y, volume_h = y + price_h + 10, 52
-    rsi_y, rsi_h = volume_y + volume_h + 22, 88
+    rsi_y, rsi_h = volume_y + volume_h + 16, 88
 
-    _rounded(draw, box, 18, fill=(14, 28, 46), outline=GRID)
-    _text(draw, (x0 + 22, y0 + 15), title, 22, WHITE, True)
-    _text(draw, (x1 - 22, y0 + 18), "Mum · Hacim · EMA20/50 · Yapı", 15, MUTED, False, "ra")
+    _rounded(draw, box, 18, fill=(12, 24, 39), outline=GRID)
+    _text(draw, (x0 + 22, y0 + 15), title, 27, WHITE, True)
 
     if df is None or len(df) < 8:
         _text(draw, ((x0 + x1) / 2, (y0 + y1) / 2), "Mum verisi yok", 26, MUTED, True, "mm")
         return
 
-    df = df.tail(max_bars).copy()
-    geometry = chart_geometry(df)
-    structures = signal.get("technical_structures") or {}
-    sr4 = (structures.get("support_resistance") or {}).get(timeframe) or {}
-    entry = _num(signal.get("entry_price"))
-    stop = _num(signal.get("stop_loss"))
-    target = _num(signal.get("tp1"))
+    if max_bars is None:
+        # Use the available history up to a practical TradingView-like candle
+        # density, with enough pixels left for readable wicks and bodies.
+        max_bars = max(90, int(w / 7.5))
+    # Calculate RSI from all available source candles before limiting the
+    # visible candle count, then plot the matching tail on the same x-axis.
+    source_df = df.copy()
+    full_rsi = rsi_wilder_series(source_df["Close"], 14)
+    full_most = most_components(source_df, period=6, percent=1.0)
+    df = source_df.tail(max_bars).copy()
+    visible_most = {
+        key: series.tail(len(df)) for key, series in full_most.items()
+    } if full_most is not None else None
+    geometry = chart_geometry(df, lookback=len(df))
     hi = float(pd.to_numeric(df["High"], errors="coerce").max())
     lo = float(pd.to_numeric(df["Low"], errors="coerce").min())
 
     channel = geometry.get("channel") or {}
     trend_lines = geometry.get("trend_lines") or {}
-    lower_trend = trend_lines.get("lower") or []
-    trend_start = _num(lower_trend[0]) if len(lower_trend) == 2 else None
-    trend_end = _num(lower_trend[1]) if len(lower_trend) == 2 else None
-    rising_trend = trend_start is not None and trend_end is not None and trend_end > trend_start
-    visible_trend = [_num(v) for v in lower_trend if _num(v) is not None] if rising_trend else []
-    levels = [v for v in (entry, stop, target, sr4.get("support"), sr4.get("resistance")) if _num(v) is not None] + visible_trend
+    triangle = _triangle_shape(geometry)
+    channel_values = [value for band in channel.values() for value in (band or [])]
+    triangle_values = [value for line in trend_lines.values() for value in (line or [])] if triangle else []
+    most_values = (
+        visible_most["ema"].dropna().astype(float).tolist()
+        + visible_most["most"].dropna().astype(float).tolist()
+        if visible_most is not None else []
+    )
+    levels = channel_values + triangle_values + most_values
     if levels:
         hi = max(hi, max(levels))
         lo = min(lo, min(levels))
@@ -149,15 +291,59 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     hi += margin
     lo -= margin
 
-    for i in range(7):
-        yy = y + i * price_h / 6
-        draw.line((x, yy, x + w, yy), fill=GRID, width=1)
-
-    # Channel/triangle geometry remains in the signal engine. It is intentionally
-    # not overlaid here: the execution chart shows only actionable references.
-
     n = len(df)
     cw = max(4, w / n)
+    geometry_bars = n
+    geometry_x = x + cw * 0.5
+    geometry_right = x + (n - 0.5) * cw
+    channel_paths = {}
+    for key in ("upper", "middle", "lower"):
+        endpoints = channel.get(key) or []
+        if len(endpoints) == 2 and endpoints[0] > 0 and endpoints[1] > 0:
+            channel_paths[key] = np.exp(np.linspace(np.log(endpoints[0]), np.log(endpoints[1]), geometry_bars))
+    def channel_points(path):
+        return [
+            (geometry_x + i * (geometry_right - geometry_x) / max(geometry_bars - 1, 1), _scale_price(value, lo, hi, y, price_h))
+            for i, value in enumerate(path)
+        ]
+    if all(key in channel_paths for key in ("upper", "middle", "lower")):
+        upper_points = channel_points(channel_paths["upper"])
+        middle_points = channel_points(channel_paths["middle"])
+        lower_points = channel_points(channel_paths["lower"])
+        draw.polygon(upper_points + list(reversed(middle_points)), fill=(21, 42, 56))
+        draw.polygon(middle_points + list(reversed(lower_points)), fill=(17, 48, 49))
+
+    # Give volume and RSI their own shaded strips beneath the price plot so
+    # neither indicator can be mistaken for candlestick data.
+    draw.rectangle((x, volume_y, x + w, volume_y + volume_h), fill=(9, 19, 32))
+    if show_rsi:
+        draw.rectangle((x, rsi_y, x + w, rsi_y + rsi_h), fill=(10, 22, 36))
+    draw.line((x, volume_y, x + w, volume_y), fill=GRID, width=1)
+    draw.line((x, volume_y + volume_h, x + w, volume_y + volume_h), fill=GRID, width=1)
+    if show_rsi:
+        draw.line((x, rsi_y, x + w, rsi_y), fill=GRID, width=1)
+        draw.line((x, rsi_y + rsi_h, x + w, rsi_y + rsi_h), fill=GRID, width=1)
+
+    for i in range(6):
+        yy = y + i * price_h / 5
+        draw.line((x, yy, x + w, yy), fill=GRID, width=1)
+
+    # Fit the channel to all visible candles; no independent support or
+    # resistance overlays are drawn on top of the channel.
+    for key, color, dashed, width in (
+        ("upper", CHANNEL_UPPER, False, 2),
+        ("middle", CHANNEL_MIDDLE, True, 2),
+        ("lower", CHANNEL_LOWER, False, 2),
+    ):
+        endpoints = channel.get(key) or []
+        if len(endpoints) == 2 and endpoints[0] > 0 and endpoints[1] > 0:
+            _draw_price_path(draw, channel_paths[key], color, geometry_x, geometry_right, lo, hi, y, price_h, width, dashed)
+    if triangle:
+        for key in ("upper", "lower"):
+            endpoints = trend_lines.get(key) or []
+            if len(endpoints) == 2:
+                _draw_price_path(draw, endpoints, PATTERN_LINE, geometry_x, geometry_right, lo, hi, y, price_h, 2, True)
+
     volume = pd.to_numeric(df.get("Volume"), errors="coerce") if "Volume" in df else None
     vmax = float(volume.max()) if volume is not None and not volume.empty else 0.0
     for i, row in enumerate(df.itertuples()):
@@ -182,65 +368,62 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
             vh = float(volume.iloc[i]) / vmax * volume_h
             draw.rectangle((cx - cw * 0.28, volume_y + volume_h - vh, cx + cw * 0.28, volume_y + volume_h), fill=(*color[:3],))
 
-    close = pd.to_numeric(df["Close"], errors="coerce")
-    for span, color in ((20, BLUE), (50, AMBER)):
-        ema = _ema(close, span)
-        pts = []
-        for i, val in enumerate(ema):
-            if pd.isna(val):
-                continue
-            pts.append((x + i * cw + cw * 0.5, _scale_price(float(val), lo, hi, y, price_h)))
-        if len(pts) > 1:
-            draw.line(pts, fill=color, width=3)
+    # Plot the actual trailing-stop series calculated from the same OHLCV bars.
+    if visible_most is not None:
+        _draw_price_path(
+            draw,
+            visible_most["ema"].astype(float).to_numpy(),
+            MOST_EMA_COLOR,
+            geometry_x,
+            geometry_right,
+            lo,
+            hi,
+            y,
+            price_h,
+            width=4,
+        )
+        _draw_price_path(
+            draw,
+            visible_most["most"].astype(float).to_numpy(),
+            MOST_STOP_COLOR,
+            geometry_x,
+            geometry_right,
+            lo,
+            hi,
+            y,
+            price_h,
+            width=3,
+        )
 
-    if rising_trend:
-        _draw_series_line(draw, lower_trend, TEAL, x, w, lo, hi, y, price_h, 4)
-        trend_y = _scale_price(float(lower_trend[-1]), lo, hi, y, price_h)
-        _rounded(draw, (x + 14, trend_y - 16, x + 190, trend_y + 14), 7, fill=(11, 23, 38), outline=TEAL)
-        _text(draw, (x + 26, trend_y - 1), "YÜKSELEN TREND", 12, TEAL, True, "lm")
-
-    most_values = most_series(df, period=9, percent=2.0)
-    if most_values is not None:
-        vals = [float(v) for v in most_values.tail(n)]
-        _draw_series_line(draw, vals, (218, 112, 255), x, w, lo, hi, y, price_h, 3)
-        _text(draw, (x + 10, y + price_h - 26), f"MOST(9,2) {vals[-1]:.2f}", 13, (218, 112, 255), True)
-
-    structural_levels = (
-        (sr4.get("support"), GREEN, f"{timeframe} DESTEK", True),
-        (sr4.get("resistance"), RED, f"{timeframe} DİRENÇ", True),
-        (entry, CYAN, "GİRİŞ", False),
-        (stop, RED, "STOP", False),
-        (target, GREEN, "H1", False),
-    )
-    level_rows = []
-    for price, color, label, dashed in structural_levels:
-        p = _num(price)
-        if p is None:
-            continue
-        level_rows.append({"p": p, "color": color, "label": label, "dash": dashed, "y": _scale_price(p, lo, hi, y, price_h)})
-    level_rows.sort(key=lambda row: row["y"])
-    previous = y - 26
-    for row in level_rows:
-        row["label_y"] = max(row["y"], previous + 27)
-        previous = row["label_y"]
-    if level_rows and level_rows[-1]["label_y"] > y + price_h - 12:
-        shift = level_rows[-1]["label_y"] - (y + price_h - 12)
-        for row in level_rows:
-            row["label_y"] -= shift
-    for row in level_rows:
-        _line_with_label(draw, x, w, row["y"], row["color"], f"{row['label']} {row['p']:.2f}", row["dash"], 2, row["label_y"])
+    _text(draw, (x + w + 10, volume_y + 3), "HACİM", 12, MUTED, True, "lm")
 
     pattern = geometry.get("pattern") or {}
-    if pattern:
-        name = str(pattern.get("name") or "FORMASYON").replace("_", " ")
-        _rounded(draw, (x + 12, y + 12, x + 285, y + 50), 10, fill=(32, 67, 82), outline=CYAN)
-        _text(draw, (x + 26, y + 23), f"✓ {name}", 15, CYAN, True)
+    if triangle:
+        pattern_labels = {
+            "SYMMETRIC_TRIANGLE": "SİMETRİK ÜÇGEN",
+            "ASCENDING_TRIANGLE": "YÜKSELEN ÜÇGEN",
+            "DESCENDING_TRIANGLE": "ALÇALAN ÜÇGEN",
+            "RISING_WEDGE": "YÜKSELEN KAMA",
+            "FALLING_WEDGE": "DÜŞEN KAMA",
+        }
+        name = pattern_labels.get(pattern.get("name"), triangle)
+        _rounded(draw, (x + 14, y + 12, x + 320, y + 46), 9, fill=(49, 42, 32), outline=PATTERN_LINE)
+        _text(draw, (x + 27, y + 29), name, 14, PATTERN_LINE, True, "lm")
+
+    channel_label, channel_color = _channel_position(float(df["Close"].iloc[-1]), channel)
+    channel_heading = channel_label if channel_label.startswith("KANAL ") else f"KANAL · {channel_label}"
+    _text(draw, (x1 - 26, y0 + 17), channel_heading, 16, channel_color, True, "ra")
+    most_result = most(df, period=6, percent=1.0)
+    if most_result:
+        direction = "YUKARI" if most_result.get("trend") == "UP" else "AŞAĞI"
+        most_color = GREEN if direction == "YUKARI" else RED
+        _text(draw, (x1 - 26, y0 + 42), f"MOST {timeframe} · {most_result.get('level', 0):.2f} · {direction}", 15, most_color, True, "ra")
 
     # Price axis labels and TradingView-like time markers.
-    for i in range(7):
-        value = hi - (hi - lo) * i / 6
-        yy = y + price_h * i / 6
-        _text(draw, (x + w + 10, yy), f"{value:.2f}", 12, MUTED, False, "lm")
+    for i in range(6):
+        value = hi - (hi - lo) * i / 5
+        yy = y + price_h * i / 5
+        _text(draw, (x + w + 10, yy), f"{value:.2f}", 14, MUTED, False, "lm")
 
     if not show_rsi:
         if isinstance(df.index, pd.DatetimeIndex):
@@ -251,19 +434,20 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
 
     # RSI(14) panel; values are derived from the same displayed bars.
     draw.line((x, rsi_y, x + w, rsi_y), fill=GRID, width=1)
-    rsi = rsi_wilder_series(df["Close"], 14).tail(n)
+    rsi = full_rsi.tail(n)
     for level, color in ((70, RED), (50, GRID), (30, GREEN)):
         yy = rsi_y + (100 - level) / 100 * rsi_h
-        for xx in range(int(x), int(x + w), 18):
-            draw.line((xx, yy, min(xx + 9, x + w), yy), fill=color, width=1)
-        _text(draw, (x + w + 10, yy), str(level), 11, color, False, "lm")
+        line_color = GRID if level == 50 else (54, 71, 88)
+        draw.line((x, yy, x + w, yy), fill=line_color, width=1)
+        if level in (70, 30):
+            _text(draw, (x + w + 10, yy), str(level), 12, color, True, "lm")
     rsi_pts = []
     for i, value in enumerate(rsi):
         if pd.notna(value):
             rsi_pts.append((x + i * cw + cw * 0.5, rsi_y + (100 - float(value)) / 100 * rsi_h))
     if len(rsi_pts) > 1:
         draw.line(rsi_pts, fill=AMBER, width=3)
-    divergence = rsi_divergence(df)
+    divergence = rsi_divergence(source_df)
     dtype = divergence.get("type")
     dcolor = GREEN if dtype == "BULLISH" else RED if dtype == "BEARISH" else MUTED
     _text(draw, (x + 8, rsi_y + 5), f"{timeframe} RSI(14) {float(rsi.dropna().iloc[-1]):.1f} · {divergence.get('label')}", 13, dcolor, True)
@@ -284,11 +468,12 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
 
 
 def _metric(draw, x, y, w, title, value, color=TEXT, subtitle=None):
-    _rounded(draw, (x, y, x + w, y + 94), 14, fill=PANEL2, outline=GRID)
-    _text(draw, (x + 14, y + 12), title, 14, MUTED, True)
-    _text(draw, (x + 14, y + 39), value, 25, color, True)
+    _rounded(draw, (x, y, x + w, y + 100), 14, fill=PANEL2, outline=GRID)
+    draw.rounded_rectangle((x + 2, y + 2, x + w - 2, y + 6), radius=2, fill=color)
+    _text(draw, (x + 16, y + 12), title, 17, MUTED, True)
+    _text(draw, (x + 16, y + 40), value, 29, color, True)
     if subtitle:
-        _text(draw, (x + 14, y + 72), subtitle, 11, MUTED)
+        _text(draw, (x + 16, y + 77), subtitle, 14, MUTED)
 
 
 def _wrapped(draw, xy, text, max_width, size=16, fill=TEXT, bold=False, max_lines=3, line_gap=5):
@@ -328,8 +513,9 @@ def build_signal_card(signal, item, state=None):
     algo = str(signal.get("main_algorithm") or "").replace("_V3", "").replace("_", " ")
     score = _num(signal.get("score"), 0.0) or 0.0
     stage = (state or {}).get("stage") or ("ÇOK GÜÇLÜ" if score >= 90 else "GÜÇLÜ" if score >= 83 else "ADAY")
+    height = 2200 if scope == "POSITION" else H
 
-    img = Image.new("RGB", (W, H), BG)
+    img = Image.new("RGB", (W, height), BG)
     draw = ImageDraw.Draw(img)
 
     _rounded(draw, (24, 20, W - 24, 124), 22, fill=(18, 37, 60), outline=GRID)
@@ -338,30 +524,28 @@ def build_signal_card(signal, item, state=None):
     phase = str(signal.get("market_structure_phase") or "-")
     phase_tr = {"STARTING": "HAREKET BAŞLANGICI", "EARLY_TREND": "ERKEN TREND"}.get(phase, phase)
     bot_support = signal.get("bot_support") or {}
-    bot_badge = "BOT TEYİTLİ · " if bot_support else ""
-    _text(draw, (48, 89), f"{bot_badge}{algo.title()}  ·  {phase_tr}", 17, GREEN if bot_support else CYAN, True)
-    _text(draw, (W - 48, 39), f"{stage} · {score:.0f}/100", 27, _stage_color(stage), True, "ra")
-    _text(draw, (W - 48, 85), "PROFESYONEL YAPI MOTORU", 14, MUTED, True, "ra")
+    algo_label = {"TREND START": "TREND BAŞLANGICI"}.get(algo.upper(), algo.title())
+    _text(draw, (48, 89), algo_label, 17, CYAN, True)
+    _text(draw, (W - 48, 65), "BIST · TEKNİK SİNYAL", 15, MUTED, True, "ra")
 
     entry = _num(signal.get("entry_price"))
-    current = _num(signal.get("current_price"), entry)
     stop = _num(signal.get("stop_loss"))
     tp1 = _num(signal.get("tp1"))
     tp2 = _num(signal.get("tp2"))
     tp3 = _num(signal.get("tp3"))
 
     rs = _num(signal.get("relative_strength_percentile"))
-    rvol = _num(signal.get("session_rvol"))
     r15 = _num(signal.get("rsi_15m"))
-    r4 = _num(signal.get("rsi_4h"))
-    r1 = _num(signal.get("rsi_1d"))
-    day = _num(signal.get("day_change_pct"))
-
+    # Use the same 4H OHLC source as the displayed chart. The signal snapshot
+    # is only a fallback if the corresponding candles are unavailable.
+    r4 = _last_rsi(_frame(item, "4h"))
+    if r4 is None:
+        r4 = _num(signal.get("rsi_4h"))
     # The first row answers the trader's immediate decision questions.
     gap = 12
     mw = (W - 48 - gap * 5) / 6
     kpis = [
-        ("SİNYAL GÜCÜ", f"{score:.0f}/100", _stage_color(stage), phase_tr),
+        ("SİNYAL GÜCÜ", f"{score:.0f}/100", _stage_color(stage), None),
         ("GİRİŞ", f"{entry:.2f}" if entry is not None else "-", CYAN, "planlanan"),
         ("STOP", f"{stop:.2f}" if stop is not None else "-", RED, f"risk %{signal.get('risk_pct','-')}"),
         ("HEDEF 1", f"{tp1:.2f}" if tp1 is not None else "-", GREEN, "ilk realize"),
@@ -372,109 +556,128 @@ def build_signal_card(signal, item, state=None):
         _metric(draw, 24 + i * (mw + gap), 144, mw, *values)
 
     tf = "4h" if scope == "POSITION" else "15m"
+    chart_top = 258
     chart_df = _frame(item, tf)
-    _draw_candle_chart(
-        draw,
-        chart_df,
-        (24, 258, W - 24, 1120),
-        signal,
-        title=f"{('4 SAATLİK' if tf == '4h' else '15 DAKİKALIK')} TRADE GRAFİĞİ",
-        timeframe="4H" if tf == "4h" else "15M",
-        max_bars=90,
-        show_rsi=True,
-    )
-
-    # Position cards also carry a denser 1H execution view in the same image.
-    bottom_top = 1140
     if scope == "POSITION":
+        chart_bottom = 930
+        hourly_top, hourly_bottom = 950, 1622
+        bottom_top = 1642
+        _draw_candle_chart(
+            draw,
+            chart_df,
+            (24, chart_top, W - 24, chart_bottom),
+            signal,
+            title="4 SAATLİK TRADE GRAFİĞİ",
+            timeframe="4H",
+            max_bars=None,
+            show_rsi=True,
+        )
         hourly_df = _frame(item, "1h")
         _draw_candle_chart(
             draw,
             hourly_df,
-            (24, 1140, W - 24, 1880),
+            (24, hourly_top, W - 24, hourly_bottom),
             signal,
-            title="1 SAATLİK YAKIN PLAN · GİRİŞ ZAMANLAMASI",
+            title="1 SAATLİK TRADE GRAFİĞİ",
             timeframe="1H",
-            max_bars=120,
-            show_rsi=False,
+            max_bars=None,
+            show_rsi=True,
         )
-        bottom_top = 1900
+    else:
+        chart_bottom = 950
+        bottom_top = 970
+        _draw_candle_chart(
+            draw,
+            chart_df,
+            (24, chart_top, W - 24, chart_bottom),
+            signal,
+            title="15 DAKİKALIK TRADE GRAFİĞİ",
+            timeframe="15M",
+            max_bars=None,
+            show_rsi=True,
+        )
 
-    # Bottom-left: trade plan and compact technical KPIs.
-    left = (24, bottom_top, 552, H - 112)
-    _rounded(draw, left, 18, fill=PANEL, outline=GRID)
-    oy = bottom_top - 1140
-    _text(draw, (46, 1160 + oy), "TRADE PLANI", 20, WHITE, True)
-    _text(draw, (46, 1200 + oy), "Giriş", 14, MUTED, True)
-    _text(draw, (182, 1195 + oy), f"{entry:.2f}" if entry else "-", 24, CYAN, True)
-    _text(draw, (46, 1242 + oy), "Stop", 14, MUTED, True)
-    _text(draw, (182, 1237 + oy), f"{stop:.2f}" if stop else "-", 24, RED, True)
-    _text(draw, (46, 1284 + oy), "Hedefler", 14, MUTED, True)
-    _text(draw, (182, 1279 + oy), " / ".join(f"{x:.2f}" for x in (tp1, tp2, tp3) if x is not None) or "-", 21, GREEN, True)
-    _text(draw, (46, 1334 + oy), "TEKNİK KPI", 17, MUTED, True)
-    tech = [
-        ("RSI 1D", "-" if r1 is None else f"{r1:.1f}"),
-        ("Hacim", "-" if rvol is None else f"{rvol:.2f}x"),
-        ("Günlük", "-" if day is None else f"%{day:.2f}"),
-        ("Canlı", "-" if current is None else f"{current:.2f}"),
-    ]
-    for i, (label, value) in enumerate(tech):
-        xx = 46 + (i % 2) * 248
-        yy = 1370 + oy + (i // 2) * 72
-        _text(draw, (xx, yy), label, 13, MUTED, True)
-        _text(draw, (xx, yy + 24), value, 21, TEXT, True)
-    calibration = signal.get("calibration_status") or "LEARNING"
-    sample = signal.get("calibration_sample_size") or 0
-    _rounded(draw, (44, 1524 + oy, 532, 1608 + oy), 12, fill=(15, 30, 49), outline=GRID)
-    _text(draw, (62, 1540 + oy), "İSTATİSTİKSEL DOĞRULAMA", 13, MUTED, True)
-    _text(draw, (62, 1568 + oy), f"{calibration} · n={sample}", 19, AMBER if calibration != "CALIBRATED" else GREEN, True)
-
-    # Bottom-right: only evidence that formed; no generic indicator dump.
-    right = (572, bottom_top, W - 24, H - 112)
-    _rounded(draw, right, 18, fill=PANEL, outline=GRID)
-    _text(draw, (596, 1160 + oy), "NEDEN SİNYAL?", 20, WHITE, True)
+    # The top row already contains the trade levels. Keep the lower area open,
+    # with compact signal evidence and risk text instead of returning to cards.
+    draw.line((24, bottom_top, W - 24, bottom_top), fill=GRID, width=2)
+    _text(draw, (44, bottom_top + 20), "SİNYAL TEYİTLERİ", 24, WHITE, True)
     confirmations = list(signal.get("technical_confirmations") or [])
     if not confirmations:
         confirmations = list(signal.get("reasons") or [])
-    elif bot_support:
-        evidence = "Bot destekli: teorik eşleşme teyidi" if bot_support.get("evidence") == "TEORIK" else "Bot destekli: derinlik teyidi"
-        confirmations.insert(0, evidence)
-    yy = 1202 + oy
-    for evidence in confirmations[:5]:
-        _text(draw, (598, yy), "✓", 18, GREEN, True)
-        yy = _wrapped(draw, (628, yy), evidence, 744, 16, TEXT, False, 2, 4) + 12
+    confirmations = [
+        str(evidence) for evidence in confirmations
+        if not str(evidence).lower().startswith("bot destekli:")
+    ]
+    col_width = (W - 120) / 3
+    for index, evidence in enumerate(confirmations[:5]):
+        col, row = index % 3, index // 3
+        xx, yy = 44 + col * col_width, bottom_top + 62 + row * 58
+        _text(draw, (xx, yy + 1), "✓", 20, GREEN, True)
+        _wrapped(draw, (xx + 32, yy), evidence, col_width - 42, 19, TEXT, False, 2, 4)
+
+    # Give the auxiliary bot's actual evidence its own readable space. The
+    # header badge used to hide the distinction between a query and a useful
+    # confirmation, so this section is always explicit about contribution.
+    bot_divider_y = bottom_top + 178
+    draw.line((44, bot_divider_y, W - 44, bot_divider_y), fill=GRID, width=1)
+    _text(draw, (44, bottom_top + 192), "YARDIMCI BOT TEYİDİ", 19, WHITE, True)
+    if bot_support:
+        kpi_boxes = _draw_bot_kpi_cards(draw, 44, bottom_top + 224, W - 88, bot_support)
+        if not kpi_boxes:
+            _text(
+                draw,
+                (44, bottom_top + 230),
+                "Teyit alındı; gösterilebilir sayısal ayrıntı bulunmuyor.",
+                16,
+                MUTED,
+            )
+    else:
+        _text(
+            draw,
+            (44, bottom_top + 226),
+            "Bot katkısı yok · bu sinyal yardımcı bot teyidi olmadan üretildi.",
+            17,
+            MUTED,
+        )
 
     warnings = list(signal.get("technical_warnings") or [])
+    risk_y = bottom_top + 334
+    draw.line((44, risk_y - 12, W - 44, risk_y - 12), fill=GRID, width=1)
     if warnings:
-        _rounded(draw, (594, 1485 + oy, W - 46, 1598 + oy), 12, fill=(54, 38, 31), outline=AMBER)
-        _text(draw, (614, 1501 + oy), "İZLENEN RİSK", 14, AMBER, True)
-        _wrapped(draw, (614, 1530 + oy), warnings[0], 730, 15, TEXT, False, 2, 4)
+        _text(draw, (44, risk_y), "İZLENECEK RİSK", 18, AMBER, True)
+        risk_summary = " · ".join(str(warning) for warning in warnings[:2])
+        _wrapped(draw, (230, risk_y), risk_summary, W - 460, 19, TEXT, False, 2, 4)
+        _text(draw, (W - 44, height - 150), "Girişte bu uyarıyı yeniden kontrol et.", 17, MUTED, False, "ra")
     else:
-        _rounded(draw, (594, 1510 + oy, W - 46, 1598 + oy), 12, fill=(24, 52, 48), outline=GREEN)
-        _text(draw, (614, 1527 + oy), "YAPISAL VETO YOK", 15, GREEN, True)
-        _text(draw, (614, 1555 + oy), "Stop seviyesi yapının bozulduğu alanı temsil eder.", 14, MUTED)
+        _text(draw, (44, risk_y), "RİSK DURUMU", 18, GREEN, True)
+        _text(draw, (230, risk_y), "Yapısal veto yok · işlem planındaki stop seviyesini koru.", 19, TEXT)
 
-    # Stable color contract, printed on every Telegram card.
+    # Keep the key limited to lines that are actually visible on this card.
     legend = [
-        (BLUE, "EMA20 · kısa trend"),
-        (AMBER, "EMA50 · ana trend"),
-        ((218, 112, 255), "MOST · trend stop"),
-        (GREEN, "Destek / hedef"),
-        (RED, "Direnç / stop"),
-        (CYAN, "Giriş fiyatı"),
-        (TEAL, "Yükselen trend"),
+        (CHANNEL_UPPER, "KANAL ÜST BANDI"),
+        (CHANNEL_MIDDLE, "KANAL ORTA BANDI"),
+        (CHANNEL_LOWER, "KANAL ALT BANDI"),
     ]
-    legend_y = H - 82
-    _text(draw, (30, legend_y - 25), "ÇİZGİ RENKLERİ", 13, MUTED, True)
+    chart_frames = [chart_df] + ([hourly_df] if scope == "POSITION" else [])
+    if any(frame is not None and most_components(frame, period=6, percent=1.0) is not None for frame in chart_frames):
+        legend.extend([
+            (MOST_EMA_COLOR, "EMA 6 · CLOSE"),
+            (MOST_STOP_COLOR, "MOST 1% · STOP"),
+        ])
+    if any(_triangle_shape(chart_geometry(frame)) for frame in chart_frames if frame is not None):
+        legend.append((PATTERN_LINE, "ÜÇGEN / TREND SIKIŞMASI"))
+    legend_y = height - 82
+    _text(draw, (30, legend_y - 25), "GRAFİK GÖSTERGELERİ", 14, MUTED, True)
     xx = 30
+    legend_step = (W - 60) / len(legend)
     for color, label in legend:
-        draw.line((xx, legend_y, xx + 25, legend_y), fill=color, width=5)
-        _text(draw, (xx + 34, legend_y), label, 12, TEXT, True, "lm")
-        xx += 190
+        draw.line((xx, legend_y, xx + 25, legend_y), fill=color, width=4)
+        _text(draw, (xx + 34, legend_y), label, 14, TEXT, True, "lm")
+        xx += legend_step
 
     now = datetime.now(TR_TZ).strftime("%d.%m.%Y %H:%M:%S")
-    _text(draw, (30, H - 18), "Ücretsiz OHLCV · Order-block/FVG mum türevidir, L2 emir defteri değildir.", 12, MUTED, False, "lb")
-    _text(draw, (W - 30, H - 18), now, 12, MUTED, False, "rb")
+    _text(draw, (30, height - 18), "Ücretsiz OHLCV · Order-block/FVG mum türevidir, L2 emir defteri değildir.", 14, MUTED, False, "lb")
+    _text(draw, (W - 30, height - 18), now, 14, MUTED, False, "rb")
 
     out_dir = Path("cards")
     out_dir.mkdir(exist_ok=True)
