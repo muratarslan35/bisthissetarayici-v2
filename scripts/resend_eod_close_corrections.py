@@ -20,12 +20,12 @@ def split_report(report, limit=3500):
     for line in report.splitlines():
         line_size = len(line) + 1
         if current and size + line_size > limit:
-            chunks.append("\\n".join(current))
+            chunks.append("\n".join(current))
             current, size = [], 0
         current.append(line)
         size += line_size
     if current:
-        chunks.append("\\n".join(current))
+        chunks.append("\n".join(current))
     return chunks
 
 
@@ -45,10 +45,10 @@ def send_once(scope, report_date, destination, report):
         return
     for index in range(progress, len(chunks)):
         lead = (
-            f"🛠 <b>KAPANIŞ FİYATI DÜZELTMESİ · {report_date}</b>\\n"
-            "Teyitli günlük kapanış verileriyle güncellenen rapor.\\n\\n"
+            f"🛠 <b>KAPANIŞ FİYATI DÜZELTMESİ · {report_date}</b>\n"
+            "Teyitli günlük kapanış verileriyle güncellenen rapor.\n\n"
             if index == 0 else
-            f"🛠 <b>DÜZELTME RAPORU DEVAMI · {report_date}</b>\\n"
+            f"🛠 <b>DÜZELTME RAPORU DEVAMI · {report_date}</b>\n"
         )
         response = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
