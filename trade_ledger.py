@@ -805,7 +805,10 @@ def build_v4_daily_report(scope=None, verified_close_date=None, report_date=None
                         current = path[-1].get("last")
             except Exception:
                 current = None
-            if current and row.get("scope") in {"POSITION", "INTRADAY"}:
+            if current and (
+                row.get("scope") == "POSITION"
+                or (verified_day and row.get("scope") == "INTRADAY")
+            ):
                 move = _pct(float(current), float(row.get("entry_price") or 0))
                 day_count = int(row.get("tracking_day_count") or 0)
                 lines.append(
