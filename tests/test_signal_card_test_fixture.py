@@ -70,24 +70,23 @@ class SignalCardTestFixtureTests(unittest.TestCase):
             "top_net_seller": "QNB", "top_net_seller_quantity": 91_000,
         }
         with patch.object(signal_card_v3, "_text", wraps=signal_card_v3._text) as draw_text, \
-                patch.object(signal_card_v3, "_draw_bot_data_row", wraps=signal_card_v3._draw_bot_data_row) as bot_rows:
+                patch.object(signal_card_v3, "_draw_bot_kpi_cards", wraps=signal_card_v3._draw_bot_kpi_cards) as bot_cards:
             path, _ = build_test_signal_card({"symbol": "HRKET.IS", "bot_support": support})
         try:
             labels = [str(call.args[2]) for call in draw_text.call_args_list if len(call.args) > 2]
             self.assertIn("YARDIMCI BOT TEYİDİ", labels)
             self.assertIn("DERİNLİK · @borsabilgibot", labels)
-            details = {call.args[2]: call.args[3] for call in bot_rows.call_args_list}
-            self.assertEqual(details["PİYASA"], [
-                ("FİYAT", "61,42 TL"), ("HACİM", "12.450.000 lot"),
-                ("ALIŞ / SATIŞ", "1,87x"), ("ALIŞ BASKISI", "%30,8"),
+            kpis = signal_card_v3._bot_kpis(support)
+            self.assertEqual([kpi[0] for kpi in kpis], [
+                "TOPLAM ALIŞ", "TOPLAM SATIŞ", "ALIŞ BASKISI", "BASKIN ALICI", "BASKIN SATICI",
             ])
-            self.assertEqual(details["EMİR DEFTERİ"], [
-                ("KADEME", "9/10"), ("ALIŞ", "1.230.000 lot · 412 emir"),
-                ("SATIŞ", "650.000 lot · 238 emir"), ("İŞLEM", "18 satır"),
+            self.assertEqual([kpi[1] for kpi in kpis], [
+                "1.230.000 lot", "650.000 lot", "%30,8", "Vakif", "QNB",
             ])
-            self.assertEqual(details["KURUM AKIŞI"], [
-                ("NET ALICI", "Vakif +245.000"), ("NET SATICI", "QNB −91.000"),
-            ])
+            self.assertEqual(kpis[3][2], "Net alış +245.000 lot")
+            self.assertEqual(kpis[4][2], "Net satış −91.000 lot")
+            self.assertEqual(bot_cards.call_count, 1)
+            self.assertEqual(bot_cards.call_args.args[1:], (44, 1866, 1832, support))
             self.assertFalse(any(label.startswith("Bot destekli:") for label in labels))
             self.assertFalse(any("BOT TEYİTLİ" in label for label in labels))
         finally:
@@ -102,16 +101,17 @@ class SignalCardTestFixtureTests(unittest.TestCase):
             "theoretical_price": 61.42, "theoretical_quantity": 125_000,
             "unmatched_side": "BUY", "theoretical_difference_pct": 0.36,
         }
-        with patch.object(signal_card_v3, "_text", wraps=signal_card_v3._text) as draw_text, \
-                patch.object(signal_card_v3, "_draw_bot_data_row", wraps=signal_card_v3._draw_bot_data_row) as bot_rows:
+        with patch.object(signal_card_v3, "_text", wraps=signal_card_v3._text) as draw_text:
             path, _ = build_test_signal_card({"bot_support": support})
         try:
             labels = [str(call.args[2]) for call in draw_text.call_args_list if len(call.args) > 2]
             self.assertIn("TEORİK EŞLEŞME · @borsabilgibot", labels)
-            details = {call.args[2]: call.args[3] for call in bot_rows.call_args_list}
-            self.assertEqual(details["EŞLEŞME"], [
-                ("TEORİK FİYAT", "61,42 TL"), ("EŞLEŞEBİLİR", "125.000 lot"),
-                ("KALAN TARAF", "Alış"), ("FİYAT FARKI", "%0,36"),
+            kpis = signal_card_v3._bot_kpis(support)
+            self.assertEqual([kpi[:2] for kpi in kpis], [
+                ("TEORİK FİYAT", "61,42 TL"),
+                ("EŞLEŞEBİLİR", "125.000 lot"),
+                ("KALAN TARAF", "Alış"),
+                ("FİYAT FARKI", "%0,36"),
             ])
         finally:
             try:
