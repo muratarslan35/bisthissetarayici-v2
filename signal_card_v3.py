@@ -622,12 +622,6 @@ def build_signal_card(signal, item, state=None):
     draw.line((44, bot_divider_y, W - 44, bot_divider_y), fill=GRID, width=1)
     _text(draw, (44, bottom_top + 192), "YARDIMCI BOT TEYİDİ", 19, WHITE, True)
     if bot_support:
-        evidence_label = {
-            "TEORIK": "TEORİK EŞLEŞME",
-            "DERINLIK": "DERİNLİK",
-        }.get(str(bot_support.get("evidence") or "").upper(), "TEYİTLİ VERİ")
-        source = str(bot_support.get("source") or "YARDIMCI BOT")
-        _text(draw, (W - 44, bottom_top + 193), f"{evidence_label} · {source}", 15, GREEN, True, "ra")
         kpi_boxes = _draw_bot_kpi_cards(draw, 44, bottom_top + 224, W - 88, bot_support)
         if not kpi_boxes:
             _text(
