@@ -369,7 +369,7 @@ def fetch_final_close_prices(symbols, session_date=None):
     daily OHLCV frame contains a bar for the exact requested Istanbul date.
     """
     symbols = list(dict.fromkeys(
-        str(symbol).replace(".IS", "").strip().upper()
+        str(symbol).strip().upper()
         for symbol in (symbols or [])
         if symbol
     ))
