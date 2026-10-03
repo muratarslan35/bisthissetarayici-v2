@@ -28,7 +28,8 @@ class SignalCardTestFixtureTests(unittest.TestCase):
                 pass
 
     def test_trade_levels_are_not_repeated_inside_charts_or_lower_summary(self):
-        with patch.object(signal_card_v3, "_text", wraps=signal_card_v3._text) as draw_text:
+        with patch.object(signal_card_v3, "_text", wraps=signal_card_v3._text) as draw_text, \
+                patch.object(signal_card_v3, "_wrapped", wraps=signal_card_v3._wrapped) as wrapped:
             path, _ = build_test_signal_card()
         try:
             labels = [str(call.args[2]) for call in draw_text.call_args_list if len(call.args) > 2]
@@ -44,11 +45,66 @@ class SignalCardTestFixtureTests(unittest.TestCase):
             self.assertEqual(labels.count("SİNYAL GÜCÜ"), 1)
             self.assertFalse(any(label.startswith(("4H DESTEK", "4H DİRENÇ")) for label in labels))
             self.assertFalse(any(label.startswith(("GİRİŞ ", "STOP ", "H1 ")) for label in labels))
+            self.assertIn("YARDIMCI BOT TEYİDİ", labels)
+            self.assertTrue(any(label.startswith("Bot katkısı yok") for label in labels))
+            self.assertFalse(any("BOT TEYİTLİ" in label for label in labels))
             self.assertTrue(any(label.startswith("MOST 4H ·") and "YUKARI" in label for label in labels))
             self.assertTrue(any(label.startswith("MOST 1H ·") and "YUKARI" in label for label in labels))
             self.assertTrue(any(label.startswith("KANAL ·") for label in labels))
             self.assertFalse(any(label.startswith("KANAL · KANAL") for label in labels))
             self.assertFalse(any("EMA20" in label or "EMA50" in label for label in labels))
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    def test_bot_depth_support_has_separate_readable_evidence_section(self):
+        support = {
+            "source": "@borsabilgibot", "evidence": "DERINLIK",
+            "depth_price": 61.42, "market_volume": 12_450_000,
+            "buy_sell_ratio": 1.87, "buy_pressure_pct": 30.8,
+            "valid_depth_levels": 9, "buy_quantity": 1_230_000,
+            "buy_orders": 412, "sell_quantity": 650_000,
+            "sell_orders": 238, "trade_rows": 18,
+            "top_net_buyer": "Vakif", "top_net_buyer_quantity": 245_000,
+            "top_net_seller": "QNB", "top_net_seller_quantity": 91_000,
+        }
+        with patch.object(signal_card_v3, "_text", wraps=signal_card_v3._text) as draw_text, \
+                patch.object(signal_card_v3, "_wrapped", wraps=signal_card_v3._wrapped) as wrapped:
+            path, _ = build_test_signal_card({"symbol": "HRKET.IS", "bot_support": support})
+        try:
+            labels = [str(call.args[2]) for call in draw_text.call_args_list if len(call.args) > 2]
+            self.assertIn("YARDIMCI BOT TEYİDİ", labels)
+            self.assertIn("DERİNLİK · @borsabilgibot", labels)
+            detail_lines = [call.args[2] for call in wrapped.call_args_list]
+            self.assertIn("Fiyat 61,42 TL · hacim 12.450.000 lot · alış/satış 1,87x · alış baskısı %30,8", detail_lines)
+            self.assertIn("Kademe 9/10 · alış 1.230.000 lot/412 emir · satış 650.000 lot/238 emir · 18 işlem satırı", detail_lines)
+            self.assertIn("Kurum akışı · net alıcı Vakif +245.000 · net satıcı QNB −91.000", detail_lines)
+            self.assertFalse(any(label.startswith("Bot destekli:") for label in labels))
+            self.assertFalse(any("BOT TEYİTLİ" in label for label in labels))
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    def test_theoretical_bot_support_shows_only_present_fields(self):
+        support = {
+            "source": "@borsabilgibot", "evidence": "TEORIK",
+            "theoretical_price": 61.42, "theoretical_quantity": 125_000,
+            "unmatched_side": "BUY", "theoretical_difference_pct": 0.36,
+        }
+        with patch.object(signal_card_v3, "_text", wraps=signal_card_v3._text) as draw_text, \
+                patch.object(signal_card_v3, "_wrapped", wraps=signal_card_v3._wrapped) as wrapped:
+            path, _ = build_test_signal_card({"bot_support": support})
+        try:
+            labels = [str(call.args[2]) for call in draw_text.call_args_list if len(call.args) > 2]
+            self.assertIn("TEORİK EŞLEŞME · @borsabilgibot", labels)
+            self.assertIn(
+                "Teorik fiyat 61,42 TL · eşleşebilir 125.000 lot · kalan taraf BUY · fiyat farkı %0,36",
+                [call.args[2] for call in wrapped.call_args_list],
+            )
         finally:
             try:
                 os.remove(path)
