@@ -121,7 +121,7 @@ class PositionClosePersistenceTests(unittest.TestCase):
         )
         self.assertEqual(saved, {"LMKDC.IS"})
         self.assertIn("→ 24.56 |", report)
-        self.assertIn("YAHOO günlük OHLCV", report)
+        self.assertIn("Yahoo günlük OHLCV", report)
 
     def test_verified_report_never_falls_back_to_yesterdays_path_price(self):
         day = trade_ledger._now().date().isoformat()
