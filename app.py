@@ -31,7 +31,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from database import init_db, get_connection
 
 from fetch_bist import fetch_bist_data
-from market_data_hub import fetch_market_snapshot
+from market_data_hub import fetch_market_snapshot, fetch_final_close_prices
 from fast_market_lane import (
     FAST_POLL_SECONDS,
     fetch_fast_quotes,
@@ -58,6 +58,7 @@ from trade_ledger import (
     record_signal,
     update_open_trades,
     get_open_trade_symbols,
+    persist_position_close_prices,
     format_trade_event,
     build_v4_daily_report,
     build_v4_weekly_report,
@@ -1569,6 +1570,8 @@ def scanner_loop():
 
     last_brut_report = None
     last_daily_report = None
+    last_channel_report = None
+    last_eod_close_fetch_time = 0.0
     last_weekly_report = None
     last_momentum_reset = None
     last_heartbeat = 0
@@ -1611,30 +1614,74 @@ def scanner_loop():
 
                 dashboard.SYSTEM_ACTIVE = False
 
-                if last_daily_report != now.date() and now.time() > BIST_CLOSE:
-
-                    report = (
-                        build_v4_daily_report(scope="POSITION")
-                        if TRADING_V3_ENABLED
-                        else build_daily_success_report()
-                    )
-
-                    if report:
-                        send_report_to_admins(report)
-
-                    if TRADING_V3_ENABLED:
+                if TRADING_V3_ENABLED:
+                    # Keep channel reporting on its own close schedule. The bot
+                    # POSITION report waits for a fresh daily close bar.
+                    if (
+                        last_channel_report != now.date()
+                        and now.weekday() < 5
+                        and now.time() > BIST_CLOSE
+                    ):
                         channel_report = build_v4_daily_report(scope="INTRADAY")
                         if channel_report:
                             send_to_channel(channel_report)
+                        last_channel_report = now.date()
 
-                    if not TRADING_V3_ENABLED:
-                        m_report = build_momentum_daily_report()
-                        if m_report:
-                            send_to_channel(m_report)
-                        last_momentum_reset = reset_momentum_if_needed(
-                            last_momentum_reset, now
+                    if (
+                        last_daily_report != now.date()
+                        and now.weekday() < 5
+                        and now.time() >= dtime(18, 15)
+                        and time.time() - last_eod_close_fetch_time >= 300
+                    ):
+                        position_symbols = get_open_trade_symbols(scope="POSITION")
+                        close_data = fetch_final_close_prices(
+                            sorted(position_symbols),
+                            session_date=now.date(),
+                        )
+                        persisted = persist_position_close_prices(
+                            close_data,
+                            session_date=now.date(),
+                        )
+                        missing = position_symbols - persisted
+                        last_eod_close_fetch_time = time.time()
+                        print(
+                            "EOD_CLOSE_VERIFY "
+                            f"date={now.date().isoformat()} "
+                            f"received={len(persisted)}/{len(position_symbols)} "
+                            f"missing={sorted(missing)}",
+                            flush=True,
                         )
 
+                        # Retry delayed/missing daily bars every five minutes.
+                        # At 19:00, missing quotes stay explicitly unverified;
+                        # the report never falls back to an old intraday value.
+                        if not missing or now.time() >= dtime(19, 0):
+                            if not position_symbols or persisted:
+                                report = build_v4_daily_report(
+                                    scope="POSITION",
+                                    verified_close_date=now.date(),
+                                )
+                                if report:
+                                    send_report_to_admins(report)
+                            else:
+                                print(
+                                    "EOD_POSITION_REPORT_DELAYED: no same-day close bars received",
+                                    flush=True,
+                                )
+                                last_daily_report = None
+                                time.sleep(300)
+                                continue
+                            last_daily_report = now.date()
+                elif last_daily_report != now.date() and now.time() > BIST_CLOSE:
+                    report = build_daily_success_report()
+                    if report:
+                        send_report_to_admins(report)
+                    m_report = build_momentum_daily_report()
+                    if m_report:
+                        send_to_channel(m_report)
+                    last_momentum_reset = reset_momentum_if_needed(
+                        last_momentum_reset, now
+                    )
                     last_daily_report = now.date()
 
                 if now.weekday() == 4 and now.time() >= dtime(18, 10):
