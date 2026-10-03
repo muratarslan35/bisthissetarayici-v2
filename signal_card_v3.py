@@ -65,91 +65,73 @@ def _tr_number(value, decimals=0):
     return rendered.replace(",", "§").replace(".", ",").replace("§", ".")
 
 
-def _bot_evidence_rows(bot_support):
-    """Group only available helper-bot measurements into compact report rows."""
+def _bot_kpis(bot_support):
+    """Return concise, evidence-backed KPI values for the auxiliary bot."""
     evidence = str(bot_support.get("evidence") or "").upper()
-    rows = []
     if evidence == "TEORIK":
-        price = _tr_number(bot_support.get("theoretical_price"), 2)
-        quantity = _tr_number(bot_support.get("theoretical_quantity"))
-        parts = []
-        if price is not None:
-            parts.append(("TEORİK FİYAT", f"{price} TL"))
-        if quantity is not None:
-            parts.append(("EŞLEŞEBİLİR", f"{quantity} lot"))
         side = bot_support.get("unmatched_side")
-        if side:
-            side_label = {"BUY": "Alış", "SELL": "Satış"}.get(str(side).upper(), str(side))
-            parts.append(("KALAN TARAF", side_label))
-        difference = _tr_number(bot_support.get("theoretical_difference_pct"), 2)
-        if difference is not None:
-            parts.append(("FİYAT FARKI", f"%{difference}"))
-        if parts:
-            rows.append(("EŞLEŞME", parts))
-    elif evidence == "DERINLIK":
-        price = _tr_number(bot_support.get("depth_price"), 2)
-        volume = _tr_number(bot_support.get("market_volume"))
-        ratio = _tr_number(bot_support.get("buy_sell_ratio"), 2)
-        pressure = _tr_number(bot_support.get("buy_pressure_pct"), 1)
-        parts = []
-        if price is not None:
-            parts.append(("FİYAT", f"{price} TL"))
-        if volume is not None:
-            parts.append(("HACİM", f"{volume} lot"))
-        if ratio is not None:
-            parts.append(("ALIŞ / SATIŞ", f"{ratio}x"))
-        if pressure is not None:
-            parts.append(("ALIŞ BASKISI", f"%{pressure}"))
-        if parts:
-            rows.append(("PİYASA", parts))
+        side_label = {"BUY": "Alış", "SELL": "Satış"}.get(str(side or "").upper(), side or "-")
+        candidates = [
+            ("TEORİK FİYAT", _tr_number(bot_support.get("theoretical_price"), 2), "TL", CYAN),
+            ("EŞLEŞEBİLİR", _tr_number(bot_support.get("theoretical_quantity")), "lot", GREEN),
+            ("KALAN TARAF", side_label if side else None, "", AMBER),
+            ("FİYAT FARKI", _tr_number(bot_support.get("theoretical_difference_pct"), 2), "", BLUE),
+        ]
+        return [
+            (label, ("%" if label == "FİYAT FARKI" else "") + value + (f" {unit}" if unit else ""), "", color)
+            for label, value, unit, color in candidates if value is not None
+        ]
 
-        level = _tr_number(bot_support.get("valid_depth_levels"))
-        buy = _tr_number(bot_support.get("buy_quantity"))
-        sell = _tr_number(bot_support.get("sell_quantity"))
-        buy_orders = _tr_number(bot_support.get("buy_orders"))
-        sell_orders = _tr_number(bot_support.get("sell_orders"))
-        trade_rows = _tr_number(bot_support.get("trade_rows"))
-        parts = []
-        if level is not None:
-            parts.append(("KADEME", f"{level}/10"))
-        if buy is not None:
-            parts.append(("ALIŞ", f"{buy} lot" + (f" · {buy_orders} emir" if buy_orders is not None else "")))
-        if sell is not None:
-            parts.append(("SATIŞ", f"{sell} lot" + (f" · {sell_orders} emir" if sell_orders is not None else "")))
-        if trade_rows is not None:
-            parts.append(("İŞLEM", f"{trade_rows} satır"))
-        if parts:
-            rows.append(("EMİR DEFTERİ", parts))
+    if evidence == "DERINLIK":
+        buy = _num(bot_support.get("buy_quantity"))
+        sell = _num(bot_support.get("sell_quantity"))
+        pressure = _num(bot_support.get("buy_pressure_pct"))
+        if pressure is None and buy is not None and sell is not None and buy + sell > 0:
+            pressure = (buy - sell) / (buy + sell) * 100.0
+        if pressure is None:
+            pressure_label, pressure_value, pressure_color = "BASKI", "Veri yok", MUTED
+        elif pressure > 0:
+            pressure_label, pressure_value, pressure_color = "ALIŞ BASKISI", f"%{_tr_number(pressure, 1)}", GREEN
+        elif pressure < 0:
+            pressure_label, pressure_value, pressure_color = "SATIŞ BASKISI", f"%{_tr_number(abs(pressure), 1)}", RED
+        else:
+            pressure_label, pressure_value, pressure_color = "DENGE", "%0,0", MUTED
 
-        buyer = bot_support.get("top_net_buyer")
-        buyer_qty = _tr_number(bot_support.get("top_net_buyer_quantity"))
-        seller = bot_support.get("top_net_seller")
-        seller_qty = _tr_number(bot_support.get("top_net_seller_quantity"))
-        flows = []
-        if buyer and buyer_qty is not None:
-            flows.append(("NET ALICI", f"{buyer} +{buyer_qty}"))
-        if seller and seller_qty is not None:
-            flows.append(("NET SATICI", f"{seller} −{seller_qty}"))
-        if flows:
-            rows.append(("KURUM AKIŞI", flows))
-    return rows
+        buyer = str(bot_support.get("top_net_buyer") or "Veri yok")
+        seller = str(bot_support.get("top_net_seller") or "Veri yok")
+        buyer_quantity = _tr_number(bot_support.get("top_net_buyer_quantity"))
+        seller_quantity = _tr_number(bot_support.get("top_net_seller_quantity"))
+        return [
+            ("TOPLAM ALIŞ", f"{_tr_number(buy)} lot" if buy is not None else "Veri yok", "Emir defteri", GREEN),
+            ("TOPLAM SATIŞ", f"{_tr_number(sell)} lot" if sell is not None else "Veri yok", "Emir defteri", RED),
+            (pressure_label, pressure_value, "Net derinlik baskısı", pressure_color),
+            ("BASKIN ALICI", buyer, f"Net alış +{buyer_quantity} lot" if buyer_quantity is not None else "Net alış", GREEN),
+            ("BASKIN SATICI", seller, f"Net satış −{seller_quantity} lot" if seller_quantity is not None else "Net satış", AMBER),
+        ]
+    return []
 
 
-def _draw_bot_data_row(draw, y, heading, values):
-    """Draw a label-led data row without introducing another KPI card."""
-    _text(draw, (44, y + 2), heading, 14, MUTED, True)
-    x = 254
-    for index, (label, value) in enumerate(values):
-        if index:
-            draw.line((x, y + 3, x, y + 21), fill=GRID, width=1)
-            x += 13
-        _text(draw, (x, y + 1), label, 11, MUTED, True)
-        label_width = draw.textbbox((0, 0), label, font=_font(11, True))[2]
-        x += label_width + 6
-        value_color = GREEN if label in {"ALIŞ BASKISI", "NET ALICI"} else TEXT
-        _text(draw, (x, y), value, 15, value_color, True)
-        value_width = draw.textbbox((0, 0), value, font=_font(15, True))[2]
-        x += value_width + 18
+def _draw_bot_kpi_cards(draw, x, y, width, bot_support):
+    kpis = _bot_kpis(bot_support)
+    if not kpis:
+        return []
+    gap = 12
+    card_height = 78
+    card_width = (width - gap * (len(kpis) - 1)) / len(kpis)
+    boxes = []
+    for index, (label, value, subtitle, color) in enumerate(kpis):
+        left = x + index * (card_width + gap)
+        right = left + card_width
+        box = (left, y, right, y + card_height)
+        _rounded(draw, box, 10, fill=(17, 34, 52), outline=GRID)
+        draw.rounded_rectangle((left + 2, y + 2, right - 2, y + 5), radius=2, fill=color)
+        _text(draw, (left + 12, y + 10), label, 12, MUTED, True)
+        value_size = 19 if len(value) < 19 else 16
+        _text(draw, (left + 12, y + 31), value, value_size, color, True)
+        if subtitle:
+            _text(draw, (left + 12, y + 57), subtitle, 11, MUTED)
+        boxes.append(box)
+    return boxes
 
 
 def _frame(item, tf):
@@ -646,8 +628,8 @@ def build_signal_card(signal, item, state=None):
         }.get(str(bot_support.get("evidence") or "").upper(), "TEYİTLİ VERİ")
         source = str(bot_support.get("source") or "YARDIMCI BOT")
         _text(draw, (W - 44, bottom_top + 193), f"{evidence_label} · {source}", 15, GREEN, True, "ra")
-        bot_rows = _bot_evidence_rows(bot_support)
-        if not bot_rows:
+        kpi_boxes = _draw_bot_kpi_cards(draw, 44, bottom_top + 224, W - 88, bot_support)
+        if not kpi_boxes:
             _text(
                 draw,
                 (44, bottom_top + 230),
@@ -655,8 +637,6 @@ def build_signal_card(signal, item, state=None):
                 16,
                 MUTED,
             )
-        for row_index, (heading, values) in enumerate(bot_rows[:3]):
-            _draw_bot_data_row(draw, bottom_top + 225 + row_index * 29, heading, values)
     else:
         _text(
             draw,
