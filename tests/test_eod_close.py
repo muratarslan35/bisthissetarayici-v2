@@ -134,3 +134,25 @@ class PositionClosePersistenceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class ChannelClosePersistenceTests(PositionClosePersistenceTests):
+    def test_persists_verified_close_for_intraday_scope(self):
+        conn = self._connect()
+        opened = (trade_ledger._now() - timedelta(days=1)).isoformat()
+        conn.execute("""
+            INSERT INTO paper_trades (
+                id, symbol, scope, status, entry_price, opened_at,
+                tracking_day_count, tracking_days_json, tracking_path_json,
+                policy_version
+            ) VALUES (2, 'HUNER.IS', 'INTRADAY', 'OPEN', 4.40, ?, 1,
+                      '[]', '[]', ?)
+        """, (opened, trade_ledger.POLICY_VERSION))
+        conn.commit()
+        conn.close()
+        day = trade_ledger._now().date().isoformat()
+        saved = trade_ledger.persist_position_close_prices(
+            {"HUNER.IS": {"price": 4.53, "session_date": day}}, day, scope="INTRADAY"
+        )
+        self.assertEqual(saved, {"HUNER.IS"})

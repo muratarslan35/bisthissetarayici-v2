@@ -214,6 +214,22 @@ jobs:
           PY
           REMOTE
 
+      - name: Resend verified close corrections for latest reports
+        if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[resend-eod-correction]') }}
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/key \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            ubuntu@89.168.99.141 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          cd /home/ubuntu/bistbot
+          set -a
+          source .env
+          set +a
+          venv/bin/python scripts/resend_eod_close_corrections.py --report-date 2026-10-02
+          REMOTE
+
       - name: Verify public browser access
         run: |
           set -Eeuo pipefail

@@ -316,26 +316,56 @@ def get_open_trade_symbols(scope=None):
     return symbols
 
 
-def persist_position_close_prices(close_prices, session_date):
-    """Persist verified daily closing prices into each open POSITION path."""
+def get_trade_symbols_open_as_of(session_date, scope):
+    """Return symbols that had a trade open at the requested session close."""
+    target_day = str(session_date)[:10]
+    start = datetime.fromisoformat(target_day).replace(tzinfo=TR_TZ)
+    end = start + timedelta(days=1)
+    cutoff = (start - timedelta(days=16)).isoformat()
+    conn = get_connection()
+    cur = conn.cursor()
+    if scope == "POSITION":
+        cur.execute("""
+            SELECT DISTINCT symbol FROM paper_trades
+            WHERE scope=? AND opened_at>=? AND opened_at<?
+              AND (status='OPEN' OR closed_at>=?)
+        """, (scope, cutoff, end.isoformat(), end.isoformat()))
+    else:
+        cur.execute("""
+            SELECT DISTINCT symbol FROM paper_trades
+            WHERE scope=? AND opened_at>=? AND opened_at<?
+              AND (status='OPEN' OR closed_at>=?)
+        """, (scope, start.isoformat(), end.isoformat(), end.isoformat()))
+    symbols = {row["symbol"] for row in cur.fetchall()}
+    conn.close()
+    return symbols
+
+
+def persist_position_close_prices(close_prices, session_date, scope="POSITION"):
+    """Persist verified daily closes for trades open at the target session close."""
     target_day = str(session_date)[:10]
     fetched_at = _now().isoformat()
     if not close_prices:
         return set()
 
+    target_end = (
+        datetime.fromisoformat(target_day).replace(tzinfo=TR_TZ) + timedelta(days=1)
+    ).isoformat()
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
         SELECT id, symbol, entry_price, tracking_path_json
         FROM paper_trades
-        WHERE scope='POSITION' AND status='OPEN'
-    """)
+        WHERE scope=? AND (
+            status='OPEN' OR (status='CLOSED' AND closed_at>=?)
+        )
+    """, (scope, target_end))
     rows = [dict(row) for row in cur.fetchall()]
     updated = set()
 
     for trade in rows:
         quote = close_prices.get(trade["symbol"])
-        if not quote:
+        if not quote or str(quote.get("session_date") or target_day)[:10] != target_day:
             continue
         try:
             price = float(quote.get("price"))
@@ -376,7 +406,6 @@ def persist_position_close_prices(close_prices, session_date):
     conn.commit()
     conn.close()
     return updated
-
 
 def _pct(price, entry):
     if not entry:
@@ -681,10 +710,12 @@ def _price_text(value):
     return f"{float(value):.2f}".rstrip("0").rstrip(".")
 
 
-def build_v4_daily_report(scope=None, verified_close_date=None):
+def build_v4_daily_report(scope=None, verified_close_date=None, report_date=None):
     now = _now()
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    position_cutoff = (now - timedelta(days=16)).isoformat()
+    report_day = str(report_date or now.date())[:10]
+    start = datetime.fromisoformat(report_day).replace(tzinfo=TR_TZ)
+    end = start + timedelta(days=1)
+    position_cutoff = (start - timedelta(days=16)).isoformat()
     conn = get_connection()
     cur = conn.cursor()
     sql = """
@@ -701,15 +732,20 @@ def build_v4_daily_report(scope=None, verified_close_date=None):
                    net_result_pct, opened_at, closed_at, tracking_day_count,
                    tracking_path_json
             FROM paper_trades
-            WHERE policy_version=? AND scope='POSITION' AND (
-                (status='OPEN' AND opened_at>=?)
-                OR (status='CLOSED' AND closed_at>=?)
-            )
+            WHERE policy_version=? AND scope='POSITION'
+              AND opened_at>=? AND opened_at<?
+              AND (status='OPEN' OR closed_at>=?)
         """
-        params = [POLICY_VERSION, position_cutoff, start.isoformat()]
+        params = [POLICY_VERSION, position_cutoff, end.isoformat(), end.isoformat()]
     elif scope:
-        sql += " AND scope=?"
-        params.append(scope)
+        sql += " AND scope=? AND opened_at<?"
+        params.extend([scope, end.isoformat()])
+        if scope == "INTRADAY":
+            # The channel's daily report includes every signal opened that day;
+            # closed rows keep their recorded exits, while open rows use the
+            # verified session close.
+            sql += " AND opened_at>=?"
+            params.append(start.isoformat())
     else:
         sql = """
             SELECT symbol, scope, status, entry_price, exit_price, result_pct,
@@ -740,19 +776,24 @@ def build_v4_daily_report(scope=None, verified_close_date=None):
     )
     verified_day = str(verified_close_date)[:10] if verified_close_date else None
     lines = [f"<b>{title}</b>"]
-    if verified_day and scope == "POSITION":
+    if verified_day and scope in {"POSITION", "INTRADAY"}:
         lines.append(f"📅 Kapanış teyidi: {verified_day} · Yahoo günlük OHLCV")
     lines.append("")
     for row in rows:
         symbol = str(row.get("symbol") or "").replace(".IS", "")
         entry = _price_text(row.get("entry_price"))
-        if row.get("status") != "CLOSED":
+        closed_at = row.get("closed_at")
+        open_as_of_report = (
+            row.get("status") != "CLOSED"
+            or (closed_at and str(closed_at) >= end.isoformat())
+        )
+        if open_as_of_report:
             active += 1
             current = None
             try:
                 path = json.loads(row.get("tracking_path_json") or "[]")
                 if path:
-                    if verified_day and row.get("scope") == "POSITION":
+                    if verified_day and row.get("scope") in {"POSITION", "INTRADAY"}:
                         final_day = next(
                             (item for item in path if item.get("date") == verified_day),
                             None,
@@ -763,14 +804,17 @@ def build_v4_daily_report(scope=None, verified_close_date=None):
                         current = path[-1].get("last")
             except Exception:
                 current = None
-            if current and row.get("scope") == "POSITION":
+            if current and (
+                row.get("scope") == "POSITION"
+                or (verified_day and row.get("scope") == "INTRADAY")
+            ):
                 move = _pct(float(current), float(row.get("entry_price") or 0))
                 day_count = int(row.get("tracking_day_count") or 0)
                 lines.append(
                     f"⏳ {symbol} | {entry} → {_price_text(current)} | "
                     f"{move:+.2f}% | Takip {day_count}/10"
                 )
-            elif verified_day and row.get("scope") == "POSITION":
+            elif verified_day and row.get("scope") in {"POSITION", "INTRADAY"}:
                 day_count = int(row.get("tracking_day_count") or 0)
                 lines.append(
                     f"⏳ {symbol} | {entry} → kapanış doğrulanamadı | Takip {day_count}/10"
