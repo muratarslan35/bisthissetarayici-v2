@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw, ImageFont
 from professional_technical_engine import (
     chart_geometry,
     most,
-    most_series,
+    most_components,
     rsi_divergence,
     rsi_wilder_series,
 )
@@ -33,7 +33,8 @@ CHANNEL_MIDDLE = (130, 147, 169)
 CHANNEL_LOWER = (55, 151, 142)
 PATTERN_LINE = (226, 170, 100)
 WHITE = (255, 255, 255)
-MOST_LINE = (115, 164, 255)
+MOST_EMA_COLOR = (48, 215, 130)
+MOST_STOP_COLOR = (185, 119, 81)
 
 
 def _font(size, bold=False):
@@ -280,9 +281,11 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     # visible candle count, then plot the matching tail on the same x-axis.
     source_df = df.copy()
     full_rsi = rsi_wilder_series(source_df["Close"], 14)
-    full_most = most_series(source_df, period=9, percent=2.0)
+    full_most = most_components(source_df, period=6, percent=1.0)
     df = source_df.tail(max_bars).copy()
-    visible_most = full_most.tail(len(df)) if full_most is not None else None
+    visible_most = {
+        key: series.tail(len(df)) for key, series in full_most.items()
+    } if full_most is not None else None
     geometry = chart_geometry(df, lookback=len(df))
     hi = float(pd.to_numeric(df["High"], errors="coerce").max())
     lo = float(pd.to_numeric(df["Low"], errors="coerce").min())
@@ -292,7 +295,11 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     triangle = _triangle_shape(geometry)
     channel_values = [value for band in channel.values() for value in (band or [])]
     triangle_values = [value for line in trend_lines.values() for value in (line or [])] if triangle else []
-    most_values = visible_most.dropna().astype(float).tolist() if visible_most is not None else []
+    most_values = (
+        visible_most["ema"].dropna().astype(float).tolist()
+        + visible_most["most"].dropna().astype(float).tolist()
+        if visible_most is not None else []
+    )
     levels = channel_values + triangle_values + most_values
     if levels:
         hi = max(hi, max(levels))
@@ -380,15 +387,11 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
             draw.rectangle((cx - cw * 0.28, volume_y + volume_h - vh, cx + cw * 0.28, volume_y + volume_h), fill=(*color[:3],))
 
     # Plot the actual trailing-stop series calculated from the same OHLCV bars.
-    if visible_most is not None and visible_most.notna().sum() > 1:
-        most_points = [
-            float(value) if pd.notna(value) else np.nan
-            for value in visible_most
-        ]
+    if visible_most is not None:
         _draw_price_path(
             draw,
-            most_points,
-            MOST_LINE,
+            visible_most["ema"].astype(float).to_numpy(),
+            MOST_EMA_COLOR,
             geometry_x,
             geometry_right,
             lo,
@@ -396,6 +399,18 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
             y,
             price_h,
             width=4,
+        )
+        _draw_price_path(
+            draw,
+            visible_most["most"].astype(float).to_numpy(),
+            MOST_STOP_COLOR,
+            geometry_x,
+            geometry_right,
+            lo,
+            hi,
+            y,
+            price_h,
+            width=3,
         )
 
     _text(draw, (x + w + 10, volume_y + 3), "HACİM", 12, MUTED, True, "lm")
@@ -416,7 +431,7 @@ def _draw_candle_chart(draw, df, box, signal, title="", timeframe="4H", max_bars
     channel_label, channel_color = _channel_position(float(df["Close"].iloc[-1]), channel)
     channel_heading = channel_label if channel_label.startswith("KANAL ") else f"KANAL · {channel_label}"
     _text(draw, (x1 - 26, y0 + 17), channel_heading, 16, channel_color, True, "ra")
-    most_result = most(df, period=9, percent=2.0)
+    most_result = most(df, period=6, percent=1.0)
     if most_result:
         direction = "YUKARI" if most_result.get("trend") == "UP" else "AŞAĞI"
         most_color = GREEN if direction == "YUKARI" else RED
@@ -670,8 +685,11 @@ def build_signal_card(signal, item, state=None):
         (CHANNEL_LOWER, "KANAL ALT BANDI"),
     ]
     chart_frames = [chart_df] + ([hourly_df] if scope == "POSITION" else [])
-    if any(frame is not None and most_series(frame) is not None for frame in chart_frames):
-        legend.append((MOST_LINE, "MOST TAKİP ÇİZGİSİ"))
+    if any(frame is not None and most_components(frame, period=6, percent=1.0) is not None for frame in chart_frames):
+        legend.extend([
+            (MOST_EMA_COLOR, "EMA 6 · CLOSE"),
+            (MOST_STOP_COLOR, "MOST 1% · STOP"),
+        ])
     if any(_triangle_shape(chart_geometry(frame)) for frame in chart_frames if frame is not None):
         legend.append((PATTERN_LINE, "ÜÇGEN / TREND SIKIŞMASI"))
     legend_y = height - 82
