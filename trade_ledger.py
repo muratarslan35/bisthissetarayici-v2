@@ -741,8 +741,11 @@ def build_v4_daily_report(scope=None, verified_close_date=None, report_date=None
         sql += " AND scope=? AND opened_at<?"
         params.extend([scope, end.isoformat()])
         if scope == "INTRADAY":
-            sql += " AND opened_at>=? AND (status='OPEN' OR closed_at>=?)"
-            params.extend([start.isoformat(), end.isoformat()])
+            # The channel's daily report includes every signal opened that day;
+            # closed rows keep their recorded exits, while open rows use the
+            # verified session close.
+            sql += " AND opened_at>=?"
+            params.append(start.isoformat())
     else:
         sql = """
             SELECT symbol, scope, status, entry_price, exit_price, result_pct,
