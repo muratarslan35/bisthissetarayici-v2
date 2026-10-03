@@ -361,6 +361,58 @@ def fetch_market_snapshot(symbols):
     return results
 
 
+
+def fetch_final_close_prices(symbols, session_date=None):
+    """
+    Fetch post-close daily bars for the requested BIST session, bypassing the
+    intraday/daily snapshot TTL caches. A price is returned only when Yahoo's
+    daily OHLCV frame contains a bar for the exact requested Istanbul date.
+    """
+    symbols = list(dict.fromkeys(
+        str(symbol).replace(".IS", "").strip().upper()
+        for symbol in (symbols or [])
+        if symbol
+    ))
+    if not symbols:
+        return {}
+
+    target_day = str(session_date or datetime.now(TR_TZ).date())[:10]
+    fetched_at = datetime.now(timezone.utc).isoformat()
+    closes = {}
+
+    for batch in _chunks(symbols, BATCH_SIZE):
+        try:
+            daily_map = _download_batch(batch, "1d", "10d")
+        except Exception as exc:
+            print(f"YF EOD CLOSE ERROR [{batch[0]}]: {exc}", flush=True)
+            continue
+
+        for symbol, daily in daily_map.items():
+            if daily is None or daily.empty or "Close" not in daily.columns:
+                continue
+            for bar_time, row in daily.iterrows():
+                try:
+                    stamp = pd.Timestamp(bar_time)
+                    if stamp.tzinfo is None:
+                        stamp = stamp.tz_localize(timezone.utc)
+                    local_stamp = stamp.tz_convert(TR_TZ)
+                    if local_stamp.date().isoformat() != target_day:
+                        continue
+                    close = float(row["Close"])
+                    if not pd.notna(close) or close <= 0:
+                        continue
+                    closes[symbol] = {
+                        "price": close,
+                        "session_date": target_day,
+                        "source_bar_time": local_stamp.isoformat(),
+                        "fetched_at": fetched_at,
+                        "data_source": "YAHOO_DAILY_CLOSE",
+                    }
+                except (TypeError, ValueError, OverflowError):
+                    continue
+
+    return closes
+
 def cache_status():
     now = time.time()
     out = {}
