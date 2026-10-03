@@ -785,8 +785,7 @@ def build_v4_daily_report(scope=None, verified_close_date=None, report_date=None
         closed_at = row.get("closed_at")
         open_as_of_report = (
             row.get("status") != "CLOSED"
-            or not closed_at
-            or str(closed_at) >= end.isoformat()
+            or (closed_at and str(closed_at) >= end.isoformat())
         )
         if open_as_of_report:
             active += 1
