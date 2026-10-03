@@ -302,13 +302,80 @@ def _calibration_for_signal(signal):
     return calibrated_probability(signal.get("score"), rows)
 
 
-def get_open_trade_symbols():
+def get_open_trade_symbols(scope=None):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT DISTINCT symbol FROM paper_trades WHERE status = 'OPEN'")
+    sql = "SELECT DISTINCT symbol FROM paper_trades WHERE status = 'OPEN'"
+    params = ()
+    if scope:
+        sql += " AND scope=?"
+        params = (scope,)
+    cur.execute(sql, params)
     symbols = {row["symbol"] for row in cur.fetchall()}
     conn.close()
     return symbols
+
+
+def persist_position_close_prices(close_prices, session_date):
+    """Persist verified daily closing prices into each open POSITION path."""
+    target_day = str(session_date)[:10]
+    fetched_at = _now().isoformat()
+    if not close_prices:
+        return set()
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, symbol, entry_price, tracking_path_json
+        FROM paper_trades
+        WHERE scope='POSITION' AND status='OPEN'
+    """)
+    rows = [dict(row) for row in cur.fetchall()]
+    updated = set()
+
+    for trade in rows:
+        quote = close_prices.get(trade["symbol"])
+        if not quote:
+            continue
+        try:
+            price = float(quote.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if price <= 0:
+            continue
+
+        try:
+            path = json.loads(trade.get("tracking_path_json") or "[]")
+        except Exception:
+            path = []
+        if not isinstance(path, list):
+            path = []
+
+        daily = next((item for item in path if item.get("date") == target_day), None)
+        if daily is None:
+            daily = {"date": target_day, "first": price, "last": price, "high": price, "low": price}
+            path.append(daily)
+
+        daily["last"] = price
+        daily["high"] = max(float(daily.get("high") or price), price)
+        daily["low"] = min(float(daily.get("low") or price), price)
+        daily["return_pct"] = _pct(price, float(trade.get("entry_price") or 0))
+        daily["close_source"] = "YAHOO_DAILY_CLOSE"
+        daily["source_bar_time"] = quote.get("source_bar_time")
+        daily["close_fetched_at"] = quote.get("fetched_at") or fetched_at
+        path = sorted(path, key=lambda item: item.get("date", ""))[-10:]
+        days = sorted({item.get("date") for item in path if item.get("date")})
+
+        cur.execute("""
+            UPDATE paper_trades
+            SET tracking_path_json=?, tracking_days_json=?, tracking_day_count=?
+            WHERE id=?
+        """, (json.dumps(path), json.dumps(days), len(days), trade["id"]))
+        updated.add(trade["symbol"])
+
+    conn.commit()
+    conn.close()
+    return updated
 
 
 def _pct(price, entry):
@@ -614,7 +681,7 @@ def _price_text(value):
     return f"{float(value):.2f}".rstrip("0").rstrip(".")
 
 
-def build_v4_daily_report(scope=None):
+def build_v4_daily_report(scope=None, verified_close_date=None):
     now = _now()
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     position_cutoff = (now - timedelta(days=16)).isoformat()
@@ -671,7 +738,11 @@ def build_v4_daily_report(scope=None):
         if scope == "INTRADAY"
         else "📊 GÜN SONU RAPORU"
     )
-    lines = [f"<b>{title}</b>", ""]
+    verified_day = str(verified_close_date)[:10] if verified_close_date else None
+    lines = [f"<b>{title}</b>"]
+    if verified_day and scope == "POSITION":
+        lines.append(f"📅 Kapanış teyidi: {verified_day} · Yahoo günlük OHLCV")
+    lines.append("")
     for row in rows:
         symbol = str(row.get("symbol") or "").replace(".IS", "")
         entry = _price_text(row.get("entry_price"))
@@ -681,7 +752,15 @@ def build_v4_daily_report(scope=None):
             try:
                 path = json.loads(row.get("tracking_path_json") or "[]")
                 if path:
-                    current = path[-1].get("last")
+                    if verified_day and row.get("scope") == "POSITION":
+                        final_day = next(
+                            (item for item in path if item.get("date") == verified_day),
+                            None,
+                        )
+                        if final_day and final_day.get("close_source") == "YAHOO_DAILY_CLOSE":
+                            current = final_day.get("last")
+                    else:
+                        current = path[-1].get("last")
             except Exception:
                 current = None
             if current and row.get("scope") == "POSITION":
@@ -690,6 +769,11 @@ def build_v4_daily_report(scope=None):
                 lines.append(
                     f"⏳ {symbol} | {entry} → {_price_text(current)} | "
                     f"{move:+.2f}% | Takip {day_count}/10"
+                )
+            elif verified_day and row.get("scope") == "POSITION":
+                day_count = int(row.get("tracking_day_count") or 0)
+                lines.append(
+                    f"⏳ {symbol} | {entry} → kapanış doğrulanamadı | Takip {day_count}/10"
                 )
             else:
                 lines.append(f"⏳ {symbol} | {entry} → -")
