@@ -1656,21 +1656,12 @@ def scanner_loop():
                         # At 19:00, missing quotes stay explicitly unverified;
                         # the report never falls back to an old intraday value.
                         if not missing or now.time() >= dtime(19, 0):
-                            if not position_symbols or persisted:
-                                report = build_v4_daily_report(
-                                    scope="POSITION",
-                                    verified_close_date=now.date(),
-                                )
-                                if report:
-                                    send_report_to_admins(report)
-                            else:
-                                print(
-                                    "EOD_POSITION_REPORT_DELAYED: no same-day close bars received",
-                                    flush=True,
-                                )
-                                last_daily_report = None
-                                time.sleep(300)
-                                continue
+                            report = build_v4_daily_report(
+                                scope="POSITION",
+                                verified_close_date=now.date(),
+                            )
+                            if report:
+                                send_report_to_admins(report)
                             last_daily_report = now.date()
                 elif last_daily_report != now.date() and now.time() > BIST_CLOSE:
                     report = build_daily_success_report()
