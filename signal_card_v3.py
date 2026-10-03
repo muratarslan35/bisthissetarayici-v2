@@ -49,6 +49,83 @@ def _num(v, default=None):
         return default
 
 
+def _tr_number(value, decimals=0):
+    number = _num(value)
+    if number is None:
+        return None
+    rendered = f"{number:,.{decimals}f}"
+    return rendered.replace(",", "§").replace(".", ",").replace("§", ".")
+
+
+def _bot_evidence_lines(bot_support):
+    """Format only the helper-bot fields present in a confirmed payload."""
+    evidence = str(bot_support.get("evidence") or "").upper()
+    lines = []
+    if evidence == "TEORIK":
+        price = _tr_number(bot_support.get("theoretical_price"), 2)
+        quantity = _tr_number(bot_support.get("theoretical_quantity"))
+        parts = []
+        if price is not None:
+            parts.append(f"Teorik fiyat {price} TL")
+        if quantity is not None:
+            parts.append(f"eşleşebilir {quantity} lot")
+        side = bot_support.get("unmatched_side")
+        if side:
+            parts.append(f"kalan taraf {side}")
+        difference = _tr_number(bot_support.get("theoretical_difference_pct"), 2)
+        if difference is not None:
+            parts.append(f"fiyat farkı %{difference}")
+        if parts:
+            lines.append(" · ".join(parts))
+    elif evidence == "DERINLIK":
+        price = _tr_number(bot_support.get("depth_price"), 2)
+        volume = _tr_number(bot_support.get("market_volume"))
+        ratio = _tr_number(bot_support.get("buy_sell_ratio"), 2)
+        pressure = _tr_number(bot_support.get("buy_pressure_pct"), 1)
+        parts = []
+        if price is not None:
+            parts.append(f"Fiyat {price} TL")
+        if volume is not None:
+            parts.append(f"hacim {volume} lot")
+        if ratio is not None:
+            parts.append(f"alış/satış {ratio}x")
+        if pressure is not None:
+            parts.append(f"alış baskısı %{pressure}")
+        if parts:
+            lines.append(" · ".join(parts))
+
+        level = _tr_number(bot_support.get("valid_depth_levels"))
+        buy = _tr_number(bot_support.get("buy_quantity"))
+        sell = _tr_number(bot_support.get("sell_quantity"))
+        buy_orders = _tr_number(bot_support.get("buy_orders"))
+        sell_orders = _tr_number(bot_support.get("sell_orders"))
+        rows = _tr_number(bot_support.get("trade_rows"))
+        parts = []
+        if level is not None:
+            parts.append(f"Kademe {level}/10")
+        if buy is not None:
+            parts.append(f"alış {buy} lot" + (f"/{buy_orders} emir" if buy_orders is not None else ""))
+        if sell is not None:
+            parts.append(f"satış {sell} lot" + (f"/{sell_orders} emir" if sell_orders is not None else ""))
+        if rows is not None:
+            parts.append(f"{rows} işlem satırı")
+        if parts:
+            lines.append(" · ".join(parts))
+
+        buyer = bot_support.get("top_net_buyer")
+        buyer_qty = _tr_number(bot_support.get("top_net_buyer_quantity"))
+        seller = bot_support.get("top_net_seller")
+        seller_qty = _tr_number(bot_support.get("top_net_seller_quantity"))
+        flows = []
+        if buyer and buyer_qty is not None:
+            flows.append(f"net alıcı {buyer} +{buyer_qty}")
+        if seller and seller_qty is not None:
+            flows.append(f"net satıcı {seller} −{seller_qty}")
+        if flows:
+            lines.append("Kurum akışı · " + " · ".join(flows))
+    return lines
+
+
 def _frame(item, tf):
     try:
         df = item.get("tf", {}).get(tf, {}).get("df")
@@ -403,9 +480,8 @@ def build_signal_card(signal, item, state=None):
     phase = str(signal.get("market_structure_phase") or "-")
     phase_tr = {"STARTING": "HAREKET BAŞLANGICI", "EARLY_TREND": "ERKEN TREND"}.get(phase, phase)
     bot_support = signal.get("bot_support") or {}
-    bot_badge = "BOT TEYİTLİ · " if bot_support else ""
     algo_label = {"TREND START": "TREND BAŞLANGICI"}.get(algo.upper(), algo.title())
-    _text(draw, (48, 89), f"{bot_badge}{algo_label}", 17, GREEN if bot_support else CYAN, True)
+    _text(draw, (48, 89), algo_label, 17, CYAN, True)
     _text(draw, (W - 48, 65), "BIST · TEKNİK SİNYAL", 15, MUTED, True, "ra")
 
     entry = _num(signal.get("entry_price"))
@@ -484,9 +560,10 @@ def build_signal_card(signal, item, state=None):
     confirmations = list(signal.get("technical_confirmations") or [])
     if not confirmations:
         confirmations = list(signal.get("reasons") or [])
-    elif bot_support:
-        evidence = "Bot destekli: teorik eşleşme teyidi" if bot_support.get("evidence") == "TEORIK" else "Bot destekli: derinlik teyidi"
-        confirmations.insert(0, evidence)
+    confirmations = [
+        str(evidence) for evidence in confirmations
+        if not str(evidence).lower().startswith("bot destekli:")
+    ]
     col_width = (W - 120) / 3
     for index, evidence in enumerate(confirmations[:5]):
         col, row = index % 3, index // 3
@@ -494,8 +571,35 @@ def build_signal_card(signal, item, state=None):
         _text(draw, (xx, yy + 1), "✓", 20, GREEN, True)
         _wrapped(draw, (xx + 32, yy), evidence, col_width - 42, 19, TEXT, False, 2, 4)
 
+    # Give the auxiliary bot's actual evidence its own readable space. The
+    # header badge used to hide the distinction between a query and a useful
+    # confirmation, so this section is always explicit about contribution.
+    bot_divider_y = bottom_top + 178
+    draw.line((44, bot_divider_y, W - 44, bot_divider_y), fill=GRID, width=1)
+    _text(draw, (44, bottom_top + 192), "YARDIMCI BOT TEYİDİ", 19, WHITE, True)
+    if bot_support:
+        evidence_label = {
+            "TEORIK": "TEORİK EŞLEŞME",
+            "DERINLIK": "DERİNLİK",
+        }.get(str(bot_support.get("evidence") or "").upper(), "TEYİTLİ VERİ")
+        source = str(bot_support.get("source") or "YARDIMCI BOT")
+        _text(draw, (W - 44, bottom_top + 193), f"{evidence_label} · {source}", 15, GREEN, True, "ra")
+        bot_lines = _bot_evidence_lines(bot_support)
+        if not bot_lines:
+            bot_lines = ["Teyit alındı; gösterilebilir sayısal ayrıntı bulunmuyor."]
+        for line_index, line in enumerate(bot_lines[:3]):
+            _wrapped(draw, (44, bottom_top + 224 + line_index * 29), line, W - 88, 17, TEXT, False, 1, 3)
+    else:
+        _text(
+            draw,
+            (44, bottom_top + 226),
+            "Bot katkısı yok · bu sinyal yardımcı bot teyidi olmadan üretildi.",
+            17,
+            MUTED,
+        )
+
     warnings = list(signal.get("technical_warnings") or [])
-    risk_y = bottom_top + 202
+    risk_y = bottom_top + 334
     draw.line((44, risk_y - 12, W - 44, risk_y - 12), fill=GRID, width=1)
     if warnings:
         _text(draw, (44, risk_y), "İZLENECEK RİSK", 18, AMBER, True)
