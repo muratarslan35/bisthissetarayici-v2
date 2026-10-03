@@ -71,7 +71,8 @@ def _bot_evidence_lines(bot_support):
             parts.append(f"eşleşebilir {quantity} lot")
         side = bot_support.get("unmatched_side")
         if side:
-            parts.append(f"kalan taraf {side}")
+            side_label = {"BUY": "Alış", "SELL": "Satış"}.get(str(side).upper(), str(side))
+            parts.append(f"kalan taraf {side_label}")
         difference = _tr_number(bot_support.get("theoretical_difference_pct"), 2)
         if difference is not None:
             parts.append(f"fiyat farkı %{difference}")
