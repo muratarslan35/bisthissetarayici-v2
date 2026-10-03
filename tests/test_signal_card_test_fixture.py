@@ -102,7 +102,7 @@ class SignalCardTestFixtureTests(unittest.TestCase):
             labels = [str(call.args[2]) for call in draw_text.call_args_list if len(call.args) > 2]
             self.assertIn("TEORİK EŞLEŞME · @borsabilgibot", labels)
             self.assertIn(
-                "Teorik fiyat 61,42 TL · eşleşebilir 125.000 lot · kalan taraf BUY · fiyat farkı %0,36",
+                "Teorik fiyat 61,42 TL · eşleşebilir 125.000 lot · kalan taraf Alış · fiyat farkı %0,36",
                 [call.args[2] for call in wrapped.call_args_list],
             )
         finally:
