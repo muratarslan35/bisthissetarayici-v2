@@ -183,6 +183,12 @@ def most(df, period=9, percent=2.0):
 
 def most_series(df, period=9, percent=2.0):
     """Return the non-repainting MOST stop for every bar, using ``most`` rules."""
+    components = most_components(df, period, percent)
+    return components["most"] if components else None
+
+
+def most_components(df, period=9, percent=2.0):
+    """Return EMA, trailing MOST stop, and trend series from the same bars."""
     work = _frame(df, period + 3)
     if work is None:
         return None
@@ -190,7 +196,7 @@ def most_series(df, period=9, percent=2.0):
     mov = close.ewm(span=period, adjust=False).mean()
     trend = 1
     stop = float(mov.iloc[0]) * (1.0 - percent / 100.0)
-    values = [stop]
+    values, trends = [stop], [trend]
     for i in range(1, len(close)):
         if trend == 1:
             stop = max(stop, float(mov.iloc[i]) * (1.0 - percent / 100.0))
@@ -203,7 +209,12 @@ def most_series(df, period=9, percent=2.0):
                 trend = 1
                 stop = float(mov.iloc[i]) * (1.0 - percent / 100.0)
         values.append(stop)
-    return pd.Series(values, index=work.index, name="MOST")
+        trends.append(trend)
+    return {
+        "ema": pd.Series(mov.to_numpy(), index=work.index, name=f"EMA{period}"),
+        "most": pd.Series(values, index=work.index, name="MOST"),
+        "trend": pd.Series(trends, index=work.index, name="MOST_TREND"),
+    }
 
 
 def rsi_wilder_series(series, period=14):
