@@ -13,6 +13,22 @@ from trade_ledger import (
 )
 
 
+def split_report(report, limit=3500):
+    chunks = []
+    current = []
+    size = 0
+    for line in report.splitlines():
+        line_size = len(line) + 1
+        if current and size + line_size > limit:
+            chunks.append("\\n".join(current))
+            current, size = [], 0
+        current.append(line)
+        size += line_size
+    if current:
+        chunks.append("\\n".join(current))
+    return chunks
+
+
 def send_once(scope, report_date, destination, report):
     marker_dir = Path("data/eod-report-corrections") / report_date
     marker_dir.mkdir(parents=True, exist_ok=True)
@@ -22,27 +38,32 @@ def send_once(scope, report_date, destination, report):
     except Exception:
         sent = {}
     key = str(destination)
-    if sent.get(key):
+    chunks = split_report(report)
+    progress = int(sent.get(key, 0) or 0)
+    if progress >= len(chunks):
         print(f"CORRECTION_ALREADY_SENT scope={scope} destination={key}")
         return
-    text = (
-        f"🛠 <b>KAPANIŞ FİYATI DÜZELTMESİ · {report_date}</b>\\n"
-        "Bu rapor, teyitli günlük kapanış verileriyle önceki raporun yerine geçer.\\n\\n"
-        + report
-    )
-    response = requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-        json={"chat_id": destination, "text": text, "parse_mode": "HTML",
-              "disable_web_page_preview": True},
-        timeout=20,
-    )
-    data = response.json() if response.content else {}
-    if not response.ok or not data.get("ok"):
-        raise RuntimeError(f"Telegram rejected {scope} for {key}: HTTP {response.status_code} {data}")
-    sent[key] = True
-    marker.write_text(json.dumps(sent, ensure_ascii=False), encoding="utf-8")
-    print(f"CORRECTION_SENT scope={scope} destination={key}")
-
+    for index in range(progress, len(chunks)):
+        lead = (
+            f"🛠 <b>KAPANIŞ FİYATI DÜZELTMESİ · {report_date}</b>\\n"
+            "Teyitli günlük kapanış verileriyle güncellenen rapor.\\n\\n"
+            if index == 0 else
+            f"🛠 <b>DÜZELTME RAPORU DEVAMI · {report_date}</b>\\n"
+        )
+        response = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": destination, "text": lead + chunks[index], "parse_mode": "HTML",
+                  "disable_web_page_preview": True},
+            timeout=20,
+        )
+        data = response.json() if response.content else {}
+        if not response.ok or not data.get("ok"):
+            raise RuntimeError(
+                f"Telegram rejected {scope} for {key}: HTTP {response.status_code} {data}"
+            )
+        sent[key] = index + 1
+        marker.write_text(json.dumps(sent, ensure_ascii=False), encoding="utf-8")
+    print(f"CORRECTION_SENT scope={scope} destination={key} parts={len(chunks)}")
 
 def main():
     parser = argparse.ArgumentParser()
