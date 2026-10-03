@@ -28,8 +28,7 @@ class SignalCardTestFixtureTests(unittest.TestCase):
                 pass
 
     def test_trade_levels_are_not_repeated_inside_charts_or_lower_summary(self):
-        with patch.object(signal_card_v3, "_text", wraps=signal_card_v3._text) as draw_text, \
-                patch.object(signal_card_v3, "_wrapped", wraps=signal_card_v3._wrapped) as wrapped:
+        with patch.object(signal_card_v3, "_text", wraps=signal_card_v3._text) as draw_text:
             path, _ = build_test_signal_card()
         try:
             labels = [str(call.args[2]) for call in draw_text.call_args_list if len(call.args) > 2]
@@ -71,16 +70,24 @@ class SignalCardTestFixtureTests(unittest.TestCase):
             "top_net_seller": "QNB", "top_net_seller_quantity": 91_000,
         }
         with patch.object(signal_card_v3, "_text", wraps=signal_card_v3._text) as draw_text, \
-                patch.object(signal_card_v3, "_wrapped", wraps=signal_card_v3._wrapped) as wrapped:
+                patch.object(signal_card_v3, "_draw_bot_data_row", wraps=signal_card_v3._draw_bot_data_row) as bot_rows:
             path, _ = build_test_signal_card({"symbol": "HRKET.IS", "bot_support": support})
         try:
             labels = [str(call.args[2]) for call in draw_text.call_args_list if len(call.args) > 2]
             self.assertIn("YARDIMCI BOT TEYİDİ", labels)
             self.assertIn("DERİNLİK · @borsabilgibot", labels)
-            detail_lines = [call.args[2] for call in wrapped.call_args_list]
-            self.assertIn("Fiyat 61,42 TL · hacim 12.450.000 lot · alış/satış 1,87x · alış baskısı %30,8", detail_lines)
-            self.assertIn("Kademe 9/10 · alış 1.230.000 lot/412 emir · satış 650.000 lot/238 emir · 18 işlem satırı", detail_lines)
-            self.assertIn("Kurum akışı · net alıcı Vakif +245.000 · net satıcı QNB −91.000", detail_lines)
+            details = {call.args[2]: call.args[3] for call in bot_rows.call_args_list}
+            self.assertEqual(details["PİYASA"], [
+                ("FİYAT", "61,42 TL"), ("HACİM", "12.450.000 lot"),
+                ("ALIŞ / SATIŞ", "1,87x"), ("ALIŞ BASKISI", "%30,8"),
+            ])
+            self.assertEqual(details["EMİR DEFTERİ"], [
+                ("KADEME", "9/10"), ("ALIŞ", "1.230.000 lot · 412 emir"),
+                ("SATIŞ", "650.000 lot · 238 emir"), ("İŞLEM", "18 satır"),
+            ])
+            self.assertEqual(details["KURUM AKIŞI"], [
+                ("NET ALICI", "Vakif +245.000"), ("NET SATICI", "QNB −91.000"),
+            ])
             self.assertFalse(any(label.startswith("Bot destekli:") for label in labels))
             self.assertFalse(any("BOT TEYİTLİ" in label for label in labels))
         finally:
@@ -96,15 +103,16 @@ class SignalCardTestFixtureTests(unittest.TestCase):
             "unmatched_side": "BUY", "theoretical_difference_pct": 0.36,
         }
         with patch.object(signal_card_v3, "_text", wraps=signal_card_v3._text) as draw_text, \
-                patch.object(signal_card_v3, "_wrapped", wraps=signal_card_v3._wrapped) as wrapped:
+                patch.object(signal_card_v3, "_draw_bot_data_row", wraps=signal_card_v3._draw_bot_data_row) as bot_rows:
             path, _ = build_test_signal_card({"bot_support": support})
         try:
             labels = [str(call.args[2]) for call in draw_text.call_args_list if len(call.args) > 2]
             self.assertIn("TEORİK EŞLEŞME · @borsabilgibot", labels)
-            self.assertIn(
-                "Teorik fiyat 61,42 TL · eşleşebilir 125.000 lot · kalan taraf Alış · fiyat farkı %0,36",
-                [call.args[2] for call in wrapped.call_args_list],
-            )
+            details = {call.args[2]: call.args[3] for call in bot_rows.call_args_list}
+            self.assertEqual(details["EŞLEŞME"], [
+                ("TEORİK FİYAT", "61,42 TL"), ("EŞLEŞEBİLİR", "125.000 lot"),
+                ("KALAN TARAF", "Alış"), ("FİYAT FARKI", "%0,36"),
+            ])
         finally:
             try:
                 os.remove(path)
@@ -177,7 +185,21 @@ class SignalCardTestFixtureTests(unittest.TestCase):
             labels = [str(call.args[2]) for call in draw_text.call_args_list if len(call.args) > 2]
             self.assertEqual(labels.count("SİMETRİK ÜÇGEN"), 2)
             self.assertIn("ÜÇGEN / TREND SIKIŞMASI", labels)
-            self.assertEqual(paths.call_count, 10)  # 3 channel bands + 2 triangle rails per chart
+            self.assertEqual(paths.call_count, 12)  # 3 channel bands + 2 triangle rails + MOST per chart
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    def test_most_trailing_stop_is_drawn_on_both_price_charts(self):
+        with patch.object(signal_card_v3, "_draw_price_path", wraps=signal_card_v3._draw_price_path) as paths:
+            path, _ = build_test_signal_card()
+        try:
+            most_calls = [call for call in paths.call_args_list if call.args[2] == signal_card_v3.MOST_LINE]
+            self.assertEqual(len(most_calls), 2)
+            self.assertTrue(all(len(call.args[1]) >= 70 for call in most_calls))
+            self.assertTrue(all(call.kwargs.get("width") == 4 for call in most_calls))
         finally:
             try:
                 os.remove(path)
