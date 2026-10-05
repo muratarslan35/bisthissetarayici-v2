@@ -1267,6 +1267,19 @@ def format_v3_signal_message(signal):
         "</pre>",
     ]
 
+    if scope == "INTRADAY" and signal.get("current_price") is not None:
+        try:
+            live_price = float(signal.get("current_price"))
+            trigger_price = float(signal.get("trigger_price") or signal.get("entry_price"))
+            live_delta = (live_price / trigger_price - 1.0) * 100.0
+            direction = "+" if live_delta >= 0 else ""
+            lines.append(
+                f"📍 Son fiyat teyidi: <b>{live_price:.2f}</b> "
+                f"(tetikten {direction}%{live_delta:.2f})"
+            )
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+
     warnings = signal.get("technical_warnings") or []
     if warnings:
         lines.append("⚠️ <b>Risk:</b> " + str(warnings[0]))

@@ -77,7 +77,7 @@ from dashboard_store import (
 )
 from resource_guard import host_pressure_state
 from signal_policy import select_publishable_candidates, policy_limits
-from signal_freshness import prepare_fresh_candidates
+from signal_freshness import prepare_fresh_candidates, validate_execution_quote
 from telegram_market_verifier import gate_signal as external_validation_gate
 from signal_state import (
     init_signal_state,
@@ -386,10 +386,10 @@ def send_report_to_admins(text):
 
 def send_to_channel(text):
     if not TELEGRAM_TOKEN or not CHANNEL_ID:
-        return
+        return False
     import requests
     try:
-        requests.post(
+        response = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             json={
                 "chat_id": CHANNEL_ID,
@@ -399,8 +399,11 @@ def send_to_channel(text):
             },
             timeout=5
         )
+        data = response.json() if response.content else {}
+        return bool(response.ok and data.get("ok"))
     except Exception as e:
-        print("Channel send error:", e)
+        print("Channel send error:", e, flush=True)
+        return False
 
 def broadcast_signal(msg):
 
@@ -466,22 +469,64 @@ def _upgrade_caption(signal, transition):
     )
 
 
+def _refresh_intraday_delivery_quote(signal, stage):
+    """Fail closed unless a fresh, executable quote still validates this entry."""
+    started = time.monotonic()
+    symbol = str(signal.get("symbol") or "")
+    quotes = fetch_fast_quotes([symbol]) if symbol else {}
+    quote = (quotes or {}).get(symbol) or {}
+    checked_at = time.time()
+    prepared, reason = validate_execution_quote(
+        signal,
+        quote,
+        now=checked_at,
+        max_quote_age_seconds=10.0,
+    )
+    quote_latency = round(max(0.0, time.monotonic() - started), 3)
+
+    if prepared is None:
+        try:
+            trigger = float(signal.get("trigger_price") or signal.get("entry_price") or 0.0)
+            current = float(quote.get("price") or 0.0)
+            slippage = ((current / trigger) - 1.0) * 100.0 if trigger and current else None
+        except (TypeError, ValueError, ZeroDivisionError):
+            trigger, current, slippage = 0.0, 0.0, None
+        observed_at = float(quote.get("observed_at") or 0.0)
+        quote_age = max(0.0, checked_at - observed_at) if observed_at else None
+        generated_at = signal.get("generated_at")
+        decision_age = None
+        if generated_at:
+            try:
+                decision_age = max(
+                    0.0,
+                    checked_at - datetime.fromisoformat(str(generated_at)).timestamp(),
+                )
+            except Exception:
+                pass
+        print(
+            "SIGNAL_DELIVERY_REJECT "
+            f"symbol={symbol} scope=INTRADAY stage={stage} reason={reason} "
+            f"trigger_price={trigger or None} current_price={current or None} "
+            f"slippage_pct={round(slippage, 3) if slippage is not None else None} "
+            f"quote_age_seconds={round(quote_age, 2) if quote_age is not None else None} "
+            f"decision_age_seconds={round(decision_age, 2) if decision_age is not None else None} "
+            f"quote_fetch_seconds={quote_latency}",
+            flush=True,
+        )
+        return None
+
+    prepared["last_mile_quote_fetch_seconds"] = quote_latency
+    prepared["last_mile_checked_at"] = checked_at
+    return prepared
+
+
 def publish_v5_signal(signal, item):
+    gate_started = time.monotonic()
     signal = external_validation_gate(signal)
+    gate_latency = round(max(0.0, time.monotonic() - gate_started), 3)
     if signal is None:
         return False
-    if signal.get("signal_scope") == "INTRADAY":
-        observed_at = float(signal.get("execution_observed_at") or 0.0)
-        if not observed_at or time.time() - observed_at > 20.0:
-            print(
-                "SIGNAL_PUBLISH_REJECT "
-                f"symbol={signal.get('symbol')} reason=publish_quote_expired",
-                flush=True,
-            )
-            return False
-        signal["publish_latency_seconds"] = round(
-            max(0.0, time.time() - observed_at), 2
-        )
+
     signal = enrich_routing(signal)
     transition = assess_signal_transition(signal)
     action = transition.get("action")
@@ -490,53 +535,116 @@ def publish_v5_signal(signal, item):
 
     signal["signal_stage"] = transition.get("stage")
     state = get_signal_state(signal.get("symbol"), signal.get("signal_scope")) or transition
+    is_intraday = signal.get("signal_scope") == "INTRADAY"
 
-    if action == "NEW":
-        if not record_signal(signal):
+    # Refresh after external verification and immediately before rendering. This
+    # catches a move which happened while the gate or the scanner was working.
+    if is_intraday:
+        signal = _refresh_intraday_delivery_quote(signal, "pre_card")
+        if signal is None:
             return False
-        push_signal(signal)
-        caption = format_v3_signal_message(signal)
-    else:
-        caption = _upgrade_caption(signal, transition)
+
+    card_item = dict(item or {})
+    if is_intraday:
+        card_item["current_price"] = signal.get("current_price")
+        card_item["fast_quote"] = {
+            "price": signal.get("current_price"),
+            "observed_at": signal.get("execution_observed_at"),
+            "source": signal.get("execution_source"),
+        }
 
     image_path = None
+    card_started = time.monotonic()
     try:
-        image_path = build_signal_card(signal, item or {}, state=state)
+        image_path = build_signal_card(signal, card_item, state=state)
         if image_path and signal.get("signal_scope") == "POSITION":
             archive_admin_signal_preview(image_path)
     except Exception as exc:
         print("V5 CARD ERROR:", exc, flush=True)
+    card_latency = round(max(0.0, time.monotonic() - card_started), 3)
 
     try:
+        # Last-mile quote is intentionally after chart rendering and directly
+        # before persistence/delivery. Never publish an entry already left behind.
+        if is_intraday:
+            signal = _refresh_intraday_delivery_quote(signal, "pre_send")
+            if signal is None:
+                return False
+
+        caption = (
+            format_v3_signal_message(signal)
+            if action == "NEW"
+            else _upgrade_caption(signal, transition)
+        )
+        signal["external_validation_latency_seconds"] = gate_latency
+        signal["card_render_latency_seconds"] = card_latency
+        signal["publish_latency_seconds"] = round(
+            max(0.0, time.time() - float(signal.get("execution_observed_at") or time.time())),
+            2,
+        )
+
+        # Do not let a rejected stale candidate appear as a published signal in
+        # the ledger or dashboard. Persist only after the final price check.
+        if action == "NEW":
+            if not record_signal(signal):
+                return False
+            push_signal(signal)
+
+        delivery_started = time.monotonic()
+        delivered = False
         destination = signal.get("delivery_destination")
         if destination == BOT_SUBSCRIBERS:
             if image_path and os.path.exists(image_path):
-                delivered = broadcast_signal_photo(image_path, caption)
-                if delivered == 0:
+                delivered = broadcast_signal_photo(image_path, caption) > 0
+                if not delivered:
                     broadcast_signal(caption)
+                    delivered = True
             else:
                 broadcast_signal(caption)
+                delivered = True
         elif destination == TELEGRAM_CHANNEL:
             if image_path and os.path.exists(image_path):
-                if not send_photo(CHANNEL_ID, image_path, caption):
-                    send_to_channel(caption)
+                delivered = send_photo(CHANNEL_ID, image_path, caption)
+                if not delivered:
+                    delivered = bool(send_to_channel(caption))
             else:
-                send_to_channel(caption)
+                delivered = bool(send_to_channel(caption))
+        delivery_latency = round(max(0.0, time.monotonic() - delivery_started), 3)
+        signal_to_delivery = None
+        if is_intraday and signal.get("generated_at"):
+            try:
+                signal_to_delivery = round(
+                    max(0.0, time.time() - datetime.fromisoformat(
+                        str(signal["generated_at"])
+                    ).timestamp()),
+                    2,
+                )
+            except Exception:
+                pass
+
+        print(
+            "V5_SIGNAL_DELIVERY "
+            f"action={action} scope={signal.get('signal_scope')} "
+            f"symbol={signal.get('symbol')} delivered={delivered} "
+            f"algorithm={signal.get('main_algorithm')} "
+            f"trigger_price={signal.get('trigger_price') or signal.get('entry_price')} "
+            f"checked_price={signal.get('current_price')} "
+            f"slippage_pct={signal.get('execution_slippage_pct')} "
+            f"quote_age_seconds={signal.get('execution_quote_age_seconds')} "
+            f"decision_latency_seconds={signal.get('decision_latency_seconds')} "
+            f"gate_seconds={gate_latency} card_seconds={card_latency} "
+            f"quote_fetch_seconds={signal.get('last_mile_quote_fetch_seconds')} "
+            f"delivery_seconds={delivery_latency} "
+            f"signal_to_delivery_seconds={signal_to_delivery}",
+            flush=True,
+        )
+        return delivered
     finally:
         if image_path:
             try:
                 os.remove(image_path)
             except Exception:
                 pass
-
-    print(
-        "V5_SIGNAL_PUBLISHED "
-        f"action={action} scope={signal.get('signal_scope')} "
-        f"symbol={signal.get('symbol')} score={signal.get('score')} "
-        f"stage={transition.get('stage')}",
-        flush=True,
-    )
-    return True
 
 
 # ======================================================

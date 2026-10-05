@@ -206,6 +206,10 @@ def fetch_fast_quotes(symbols):
     try:
         for batch in _chunks(symbols, FAST_BATCH_SIZE):
             rows = _post_batch(batch)
+            # TradingView's scanner payload has no per-symbol exchange timestamp.
+            # Stamp each returned batch after the HTTP response so quote age never
+            # starts before the quote was actually observed by this process.
+            batch_observed_at = time.time()
 
             for row in rows:
                 if not isinstance(row, dict):
@@ -223,10 +227,10 @@ def fetch_fast_quotes(symbols):
                 if price is None or price <= 0:
                     continue
 
-                ch15 = _history_change(symbol, now, price, 15)
-                ch30 = _history_change(symbol, now, price, 30)
-                ch60 = _history_change(symbol, now, price, 60)
-                vol_delta60 = _volume_delta(symbol, now, volume, 60)
+                ch15 = _history_change(symbol, batch_observed_at, price, 15)
+                ch30 = _history_change(symbol, batch_observed_at, price, 30)
+                ch60 = _history_change(symbol, batch_observed_at, price, 60)
+                vol_delta60 = _volume_delta(symbol, batch_observed_at, volume, 60)
 
                 quote = {
                     "symbol": symbol,
@@ -238,14 +242,14 @@ def fetch_fast_quotes(symbols):
                     "change_30s_pct": ch30,
                     "change_60s_pct": ch60,
                     "volume_delta_60s": round(vol_delta60, 2),
-                    "observed_at": now,
+                    "observed_at": batch_observed_at,
                     "source": "TRADINGVIEW_FAST",
                 }
                 quotes[symbol] = quote
 
                 with _LOCK:
                     _HISTORY[symbol].append({
-                        "ts": now,
+                        "ts": batch_observed_at,
                         "price": price,
                         "volume": volume,
                     })
