@@ -38,6 +38,41 @@ class SignalFreshnessTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(reason, "late_entry_price_extension")
 
+    def test_last_mile_check_blocks_42_20_to_42_60_move(self):
+        signal = self.base()
+        signal["entry_price"] = 42.20
+        signal["stop_loss"] = 41.0
+        signal["tp1"] = 45.0
+        result, reason = validate_execution_quote(
+            signal,
+            self.quote(42.60),
+            now=1_000.0,
+            max_quote_age_seconds=10.0,
+        )
+        self.assertIsNone(result)
+        self.assertEqual(reason, "late_entry_price_extension")
+
+    def test_last_mile_check_rejects_quote_older_than_ten_seconds(self):
+        result, reason = validate_execution_quote(
+            self.base(),
+            self.quote(100.1, age=11),
+            now=1_000.0,
+            max_quote_age_seconds=10.0,
+        )
+        self.assertIsNone(result)
+        self.assertEqual(reason, "delivery_quote_expired")
+
+    def test_last_mile_check_accepts_fresh_quote_inside_entry_window(self):
+        result, reason = validate_execution_quote(
+            self.base(),
+            self.quote(100.25, age=2),
+            now=1_000.0,
+            max_quote_age_seconds=10.0,
+        )
+        self.assertEqual(reason, "accepted")
+        self.assertEqual(result["entry_price"], 100.0)
+        self.assertEqual(result["current_price"], 100.25)
+
     def test_rejects_stale_quote(self):
         result, reason = validate_execution_quote(
             self.base(), self.quote(100.1, age=60), now=1_000.0
