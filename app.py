@@ -626,6 +626,7 @@ def publish_v5_signal(signal, item):
             "V5_SIGNAL_DELIVERY "
             f"action={action} scope={signal.get('signal_scope')} "
             f"symbol={signal.get('symbol')} delivered={delivered} "
+            f"algorithm={signal.get('main_algorithm')} "
             f"trigger_price={signal.get('trigger_price') or signal.get('entry_price')} "
             f"checked_price={signal.get('current_price')} "
             f"slippage_pct={signal.get('execution_slippage_pct')} "
