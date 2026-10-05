@@ -386,10 +386,10 @@ def send_report_to_admins(text):
 
 def send_to_channel(text):
     if not TELEGRAM_TOKEN or not CHANNEL_ID:
-        return
+        return False
     import requests
     try:
-        requests.post(
+        response = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             json={
                 "chat_id": CHANNEL_ID,
@@ -399,8 +399,11 @@ def send_to_channel(text):
             },
             timeout=5
         )
+        data = response.json() if response.content else {}
+        return bool(response.ok and data.get("ok"))
     except Exception as e:
-        print("Channel send error:", e)
+        print("Channel send error:", e, flush=True)
+        return False
 
 def broadcast_signal(msg):
 
@@ -550,12 +553,6 @@ def publish_v5_signal(signal, item):
             "source": signal.get("execution_source"),
         }
 
-    caption = (
-        format_v3_signal_message(signal)
-        if action == "NEW"
-        else _upgrade_caption(signal, transition)
-    )
-
     image_path = None
     card_started = time.monotonic()
     try:
@@ -574,6 +571,11 @@ def publish_v5_signal(signal, item):
             if signal is None:
                 return False
 
+        caption = (
+            format_v3_signal_message(signal)
+            if action == "NEW"
+            else _upgrade_caption(signal, transition)
+        )
         signal["external_validation_latency_seconds"] = gate_latency
         signal["card_render_latency_seconds"] = card_latency
         signal["publish_latency_seconds"] = round(
