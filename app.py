@@ -610,6 +610,17 @@ def publish_v5_signal(signal, item):
             else:
                 delivered = bool(send_to_channel(caption))
         delivery_latency = round(max(0.0, time.monotonic() - delivery_started), 3)
+        signal_to_delivery = None
+        if is_intraday and signal.get("generated_at"):
+            try:
+                signal_to_delivery = round(
+                    max(0.0, time.time() - datetime.fromisoformat(
+                        str(signal["generated_at"])
+                    ).timestamp()),
+                    2,
+                )
+            except Exception:
+                pass
 
         print(
             "V5_SIGNAL_DELIVERY "
@@ -622,7 +633,8 @@ def publish_v5_signal(signal, item):
             f"decision_latency_seconds={signal.get('decision_latency_seconds')} "
             f"gate_seconds={gate_latency} card_seconds={card_latency} "
             f"quote_fetch_seconds={signal.get('last_mile_quote_fetch_seconds')} "
-            f"delivery_seconds={delivery_latency}",
+            f"delivery_seconds={delivery_latency} "
+            f"signal_to_delivery_seconds={signal_to_delivery}",
             flush=True,
         )
         return delivered
