@@ -13,7 +13,7 @@ def _num(value, default=None):
         return default
 
 
-def validate_execution_quote(signal, quote, now=None):
+def validate_execution_quote(signal, quote, now=None, max_quote_age_seconds=45.0):
     """
     Keep the structural trigger price, but require a fresh executable quote.
 
@@ -32,8 +32,14 @@ def validate_execution_quote(signal, quote, now=None):
 
     if scope not in {"POSITION", "INTRADAY"} or not trigger or not current:
         return None, "missing_execution_quote"
-    if quote_age > 45.0:
-        return None, "stale_execution_quote"
+    max_quote_age_seconds = max(0.0, float(max_quote_age_seconds))
+    if quote_age > max_quote_age_seconds:
+        reason = (
+            "stale_execution_quote"
+            if max_quote_age_seconds >= 45.0
+            else "delivery_quote_expired"
+        )
+        return None, reason
 
     generated_at = signal.get("generated_at")
     signal_age = None
