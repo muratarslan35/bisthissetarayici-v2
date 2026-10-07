@@ -215,6 +215,7 @@ class LedgerMigrationTests(unittest.TestCase):
                 UPDATE paper_trades
                 SET status='CLOSED', exit_price=99.0, result_pct=-1.0,
                     net_result_pct=-1.0, tp1_hit=1, closed_at=?
+                WHERE symbol='CHANNELWIN.IS'
                 """,
                 ((now + timedelta(days=1)).replace(hour=0, minute=0).isoformat(),),
             )
@@ -223,7 +224,7 @@ class LedgerMigrationTests(unittest.TestCase):
             bot_report = trade_ledger.build_v4_daily_report(scope="POSITION")
             channel_report = trade_ledger.build_v4_daily_report(scope="INTRADAY")
 
-        self.assertIn("✅ BOTWIN | 100 → 99 | -1.00% · 1. hedef gün içinde görüldü", bot_report)
+        self.assertIn("✅ BOTWIN | 100 → 100 | +0.00% · 1. hedef gün içinde görüldü | Takip 1/10", bot_report)
         self.assertIn("✅ CHANNELWIN | 100 → 99 | -1.00% · 1. hedef gün içinde görüldü", channel_report)
         self.assertIn("Başarılı: 1", bot_report)
         self.assertIn("Başarısız: 0", bot_report)
