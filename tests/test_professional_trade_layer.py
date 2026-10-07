@@ -3,7 +3,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime
 from unittest.mock import patch
 
 import trade_ledger
@@ -220,7 +220,7 @@ class LedgerMigrationTests(unittest.TestCase):
                     net_result_pct=-1.0, tp1_hit=1, closed_at=?
                 WHERE symbol='CHANNELWIN.IS'
                 """,
-                ((now + timedelta(days=1)).replace(hour=0, minute=0).isoformat(),),
+                (now.isoformat(),),
             )
             conn.commit()
             conn.close()
