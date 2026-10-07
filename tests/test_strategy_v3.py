@@ -156,6 +156,17 @@ class StrategyV3Tests(unittest.TestCase):
         self.assertGreaterEqual(risk["risk_pct"], 2.5)
         self.assertLessEqual(risk["risk_pct"], 6.5)
 
+    def test_targets_are_fixed_at_one_two_and_three_percent_for_both_scopes(self):
+        for position in (True, False):
+            with self.subTest(position=position):
+                levels = sv3._risk_levels(
+                    100.0, 0.5, structural=99.7, position=position
+                )
+                self.assertEqual(
+                    (levels["tp1"], levels["tp2"], levels["tp3"]),
+                    (101.0, 102.0, 103.0),
+                )
+
     def test_intraday_rejects_near_ceiling_entry(self):
         x = item("CEIL.IS")
         prev_close = float(x["tf"]["1d"]["df"]["Close"].iloc[-1])

@@ -196,6 +196,37 @@ class LedgerMigrationTests(unittest.TestCase):
         self.assertIn("Toplam: 3", report)
         self.assertIn("Başarı Oranı: %33.3", report)
 
+    def test_tp1_hit_is_success_for_bot_and_channel_even_after_negative_close(self):
+        now = datetime(2026, 9, 28, 18, 8, tzinfo=trade_ledger.TR_TZ)
+        base = {
+            "main_algorithm": "INTRADAY_MOMENTUM_V3",
+            "score": 92, "stop_loss": 97.0,
+            "tp1": 101.0, "tp2": 102.0, "tp3": 103.0,
+        }
+        with patch.object(trade_ledger, "_now", return_value=now):
+            for symbol, scope in (("BOTWIN.IS", "POSITION"), ("CHANNELWIN.IS", "INTRADAY")):
+                self.assertTrue(trade_ledger.record_signal({
+                    **base, "symbol": symbol, "signal_scope": scope,
+                    "entry_price": 100.0,
+                }))
+            conn = trade_ledger.get_connection()
+            conn.execute(
+                """
+                UPDATE paper_trades
+                SET status='CLOSED', exit_price=99.0, result_pct=-1.0,
+                    net_result_pct=-1.0, tp1_hit=1, closed_at=?
+                """,
+                (now.isoformat(),),
+            )
+            conn.commit()
+            conn.close()
+            report = trade_ledger.build_v4_daily_report()
+
+        self.assertIn("✅ BOTWIN | 100 → 99 | -1.00% · 1. hedef gün içinde görüldü", report)
+        self.assertIn("✅ CHANNELWIN | 100 → 99 | -1.00% · 1. hedef gün içinde görüldü", report)
+        self.assertIn("Başarılı: 2", report)
+        self.assertIn("Başarısız: 0", report)
+
     def test_position_report_keeps_prior_open_trade_and_tracking_progress(self):
         opened = datetime(2026, 9, 24, 10, 0, tzinfo=trade_ledger.TR_TZ)
         report_day = datetime(2026, 10, 1, 18, 8, tzinfo=trade_ledger.TR_TZ)
