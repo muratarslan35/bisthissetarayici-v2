@@ -46,6 +46,8 @@ Environment=KAP_WATCH_LOOP_SECONDS=10
 
 EnvironmentFile=-@BIST_PATH@/.env
 EnvironmentFile=-/etc/bist-trading.env
+# Ignore stale custom CA paths from prior virtualenvs; requests uses its bundled CA.
+UnsetEnvironment=REQUESTS_CA_BUNDLE SSL_CERT_FILE CURL_CA_BUNDLE
 
 ExecStart=@BIST_PATH@/venv/bin/python @BIST_PATH@/worker.py
 TimeoutStopSec=45
