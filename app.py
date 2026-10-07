@@ -265,8 +265,16 @@ def safe_refresh_brut():
     # 5 dakikada 1 güncelle
     if now_ts - LAST_BRUT_REFRESH > 300:
 
+        refresh_fn = globals().get("refresh_brut_list")
+        if not callable(refresh_fn):
+            # The legacy BRUT refresh helper was removed; do not emit a failure
+            # every five minutes or interrupt the active V3 scanner loop.
+            LAST_BRUT_REFRESH = now_ts
+            print("BRUT REFRESH=SKIP legacy helper unavailable", flush=True)
+            return
+
         try:
-            refresh_brut_list()
+            refresh_fn()
             LAST_BRUT_REFRESH = now_ts
             print("✅ BRUT REFRESH OK")
 
