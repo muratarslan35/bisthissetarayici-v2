@@ -729,7 +729,7 @@ def build_v4_daily_report(scope=None, verified_close_date=None, report_date=None
     if scope == "POSITION":
         sql = """
             SELECT symbol, scope, status, entry_price, exit_price, result_pct,
-                   net_result_pct, opened_at, closed_at, tracking_day_count,
+                   net_result_pct, tp1_hit, opened_at, closed_at, tracking_day_count,
                    tracking_path_json
             FROM paper_trades
             WHERE policy_version=? AND scope='POSITION'
@@ -749,7 +749,7 @@ def build_v4_daily_report(scope=None, verified_close_date=None, report_date=None
     else:
         sql = """
             SELECT symbol, scope, status, entry_price, exit_price, result_pct,
-                   net_result_pct, opened_at, closed_at, tracking_day_count,
+                   net_result_pct, tp1_hit, opened_at, closed_at, tracking_day_count,
                    tracking_path_json
             FROM paper_trades
             WHERE policy_version=? AND (

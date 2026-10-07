@@ -216,16 +216,19 @@ class LedgerMigrationTests(unittest.TestCase):
                 SET status='CLOSED', exit_price=99.0, result_pct=-1.0,
                     net_result_pct=-1.0, tp1_hit=1, closed_at=?
                 """,
-                (now.isoformat(),),
+                ((now + timedelta(days=1)).replace(hour=0, minute=0).isoformat(),),
             )
             conn.commit()
             conn.close()
-            report = trade_ledger.build_v4_daily_report()
+            bot_report = trade_ledger.build_v4_daily_report(scope="POSITION")
+            channel_report = trade_ledger.build_v4_daily_report(scope="INTRADAY")
 
-        self.assertIn("✅ BOTWIN | 100 → 99 | -1.00% · 1. hedef gün içinde görüldü", report)
-        self.assertIn("✅ CHANNELWIN | 100 → 99 | -1.00% · 1. hedef gün içinde görüldü", report)
-        self.assertIn("Başarılı: 2", report)
-        self.assertIn("Başarısız: 0", report)
+        self.assertIn("✅ BOTWIN | 100 → 99 | -1.00% · 1. hedef gün içinde görüldü", bot_report)
+        self.assertIn("✅ CHANNELWIN | 100 → 99 | -1.00% · 1. hedef gün içinde görüldü", channel_report)
+        self.assertIn("Başarılı: 1", bot_report)
+        self.assertIn("Başarısız: 0", bot_report)
+        self.assertIn("Başarılı: 1", channel_report)
+        self.assertIn("Başarısız: 0", channel_report)
 
     def test_position_report_keeps_prior_open_trade_and_tracking_progress(self):
         opened = datetime(2026, 9, 24, 10, 0, tzinfo=trade_ledger.TR_TZ)
