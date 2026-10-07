@@ -211,6 +211,9 @@ class LedgerMigrationTests(unittest.TestCase):
                 }))
             conn = trade_ledger.get_connection()
             conn.execute(
+                "UPDATE paper_trades SET tp1_hit=1 WHERE symbol='BOTWIN.IS'"
+            )
+            conn.execute(
                 """
                 UPDATE paper_trades
                 SET status='CLOSED', exit_price=99.0, result_pct=-1.0,
