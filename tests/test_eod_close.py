@@ -81,6 +81,7 @@ class PositionClosePersistenceTests(unittest.TestCase):
                 net_result_pct REAL,
                 opened_at TEXT,
                 closed_at TEXT,
+                tp1_hit INTEGER NOT NULL DEFAULT 0,
                 tracking_day_count INTEGER DEFAULT 0,
                 tracking_days_json TEXT DEFAULT '[]',
                 tracking_path_json TEXT DEFAULT '[]',

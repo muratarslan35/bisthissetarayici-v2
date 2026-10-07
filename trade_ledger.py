@@ -720,7 +720,7 @@ def build_v4_daily_report(scope=None, verified_close_date=None, report_date=None
     cur = conn.cursor()
     sql = """
         SELECT symbol, scope, status, entry_price, exit_price, result_pct,
-               net_result_pct, opened_at, closed_at, tracking_day_count,
+               net_result_pct, tp1_hit, opened_at, closed_at, tracking_day_count,
                tracking_path_json
         FROM paper_trades
         WHERE policy_version=? AND opened_at>=?
@@ -729,7 +729,7 @@ def build_v4_daily_report(scope=None, verified_close_date=None, report_date=None
     if scope == "POSITION":
         sql = """
             SELECT symbol, scope, status, entry_price, exit_price, result_pct,
-                   net_result_pct, opened_at, closed_at, tracking_day_count,
+                   net_result_pct, tp1_hit, opened_at, closed_at, tracking_day_count,
                    tracking_path_json
             FROM paper_trades
             WHERE policy_version=? AND scope='POSITION'
@@ -749,7 +749,7 @@ def build_v4_daily_report(scope=None, verified_close_date=None, report_date=None
     else:
         sql = """
             SELECT symbol, scope, status, entry_price, exit_price, result_pct,
-                   net_result_pct, opened_at, closed_at, tracking_day_count,
+                   net_result_pct, tp1_hit, opened_at, closed_at, tracking_day_count,
                    tracking_path_json
             FROM paper_trades
             WHERE policy_version=? AND (
@@ -782,6 +782,7 @@ def build_v4_daily_report(scope=None, verified_close_date=None, report_date=None
     for row in rows:
         symbol = str(row.get("symbol") or "").replace(".IS", "")
         entry = _price_text(row.get("entry_price"))
+        first_target_hit = bool(row.get("tp1_hit"))
         closed_at = row.get("closed_at")
         open_as_of_report = (
             row.get("status") != "CLOSED"
@@ -810,33 +811,60 @@ def build_v4_daily_report(scope=None, verified_close_date=None, report_date=None
             ):
                 move = _pct(float(current), float(row.get("entry_price") or 0))
                 day_count = int(row.get("tracking_day_count") or 0)
-                lines.append(
-                    f"⏳ {symbol} | {entry} → {_price_text(current)} | "
-                    f"{move:+.2f}% | Takip {day_count}/10"
-                )
+                if first_target_hit:
+                    success += 1
+                    lines.append(
+                        f"✅ {symbol} | {entry} → {_price_text(current)} | "
+                        f"{move:+.2f}% · 1. hedef gün içinde görüldü | Takip {day_count}/10"
+                    )
+                else:
+                    lines.append(
+                        f"⏳ {symbol} | {entry} → {_price_text(current)} | "
+                        f"{move:+.2f}% | Takip {day_count}/10"
+                    )
             elif verified_day and row.get("scope") in {"POSITION", "INTRADAY"}:
                 day_count = int(row.get("tracking_day_count") or 0)
-                lines.append(
-                    f"⏳ {symbol} | {entry} → kapanış doğrulanamadı | Takip {day_count}/10"
-                )
+                if first_target_hit:
+                    success += 1
+                    lines.append(
+                        f"✅ {symbol} | {entry} → kapanış doğrulanamadı | "
+                        f"1. hedef gün içinde görüldü | Takip {day_count}/10"
+                    )
+                else:
+                    lines.append(
+                        f"⏳ {symbol} | {entry} → kapanış doğrulanamadı | Takip {day_count}/10"
+                    )
             else:
-                lines.append(f"⏳ {symbol} | {entry} → -")
+                if first_target_hit:
+                    success += 1
+                    lines.append(f"✅ {symbol} | {entry} → - | 1. hedef gün içinde görüldü")
+                else:
+                    lines.append(f"⏳ {symbol} | {entry} → -")
             continue
         result = row.get("net_result_pct")
         if result is None:
             result = row.get("result_pct")
         result = float(result or 0.0)
         exit_price = _price_text(row.get("exit_price"))
-        if abs(result) < 0.005:
+        if first_target_hit:
+            success += 1
+            marker = "✅"
+            outcome = " · 1. hedef gün içinde görüldü"
+        elif abs(result) < 0.005:
             neutral += 1
             marker = "➖"
+            outcome = ""
         elif result > 0:
             success += 1
             marker = "✅"
+            outcome = ""
         else:
             fail += 1
             marker = "❌"
-        lines.append(f"{marker} {symbol} | {entry} → {exit_price} | {result:+.2f}%")
+            outcome = ""
+        lines.append(
+            f"{marker} {symbol} | {entry} → {exit_price} | {result:+.2f}%{outcome}"
+        )
 
     total = len(rows)
     success_rate = success / total * 100.0 if total else 0.0
