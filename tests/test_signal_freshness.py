@@ -102,6 +102,28 @@ class SignalFreshnessTests(unittest.TestCase):
         self.assertIsNone(rejected)
         self.assertEqual(reason, "late_entry_price_extension")
 
+    def test_fixed_one_two_three_percent_targets_do_not_fail_old_tp1_rr_gate(self):
+        for scope, stop, price, expected in (
+            ("POSITION", 94.0, 100.2, "accepted"),
+            ("INTRADAY", 96.5, 100.25, "accepted"),
+        ):
+            with self.subTest(scope=scope):
+                signal = {
+                    "symbol": "FIXED.IS",
+                    "signal_scope": scope,
+                    "entry_price": 100.0,
+                    "stop_loss": stop,
+                    "tp1": 101.0,
+                    "tp2": 102.0,
+                    "tp3": 103.0,
+                    "atr_pct": 1.0,
+                }
+                result, reason = validate_execution_quote(
+                    signal, self.quote(price), now=1_000.0
+                )
+                self.assertEqual(reason, expected)
+                self.assertIsNotNone(result)
+
     def test_batch_logs_rejections(self):
         logs = []
         out = prepare_fresh_candidates(
