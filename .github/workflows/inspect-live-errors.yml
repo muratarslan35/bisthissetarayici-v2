@@ -60,3 +60,5 @@ jobs:
           echo "=== HEALTH ==="
           curl -sS -m 5 -i http://127.0.0.1:5000/health || true
           REMOTE
+
+# Read-only live diagnostics workflow; touching this file intentionally triggers SSH inspection.
