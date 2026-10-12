@@ -71,13 +71,33 @@ def validate_execution_quote(signal, quote, now=None, max_quote_age_seconds=45.0
 
     stop = _num(signal.get("stop_loss"))
     tp1 = _num(signal.get("tp1"))
-    if stop is not None and tp1 is not None:
-        remaining_risk = current - stop
-        remaining_reward = tp1 - current
-        if remaining_risk <= 0 or remaining_reward <= 0:
-            return None, "invalid_execution_room"
-        if remaining_reward / remaining_risk < min_remaining_rr:
-            return None, "execution_risk_reward_collapsed"
+    tp2 = _num(signal.get("tp2"))
+    tp3 = _num(signal.get("tp3"))
+
+    # PR #47 changed targets to fixed +1% / +2% / +3%, while stop distance
+    # remains structural (2.5–6.5% for POSITION, up to 3.5% for INTRADAY).
+    # Checking only TP1 against the old 1.0R/0.8R floor therefore rejects
+    # virtually every new signal before publication. For the fixed-target
+    # contract, validate execution room to TP3 with scope-appropriate floors;
+    # legacy/non-fixed target signals retain the original TP1 rule.
+    fixed_targets = False
+    if trigger and tp1 is not None and tp2 is not None and tp3 is not None:
+        fixed_targets = (
+            abs(tp1 / trigger - 1.01) <= 0.001
+            and abs(tp2 / trigger - 1.02) <= 0.001
+            and abs(tp3 / trigger - 1.03) <= 0.001
+        )
+
+    if stop is not None:
+        target = tp3 if fixed_targets else tp1
+        if target is not None:
+            remaining_risk = current - stop
+            remaining_reward = target - current
+            if remaining_risk <= 0 or remaining_reward <= 0:
+                return None, "invalid_execution_room"
+            rr_floor = (0.20 if scope == "POSITION" else 0.65) if fixed_targets else min_remaining_rr
+            if remaining_reward / remaining_risk < rr_floor:
+                return None, "execution_risk_reward_collapsed"
 
     signal["trigger_price"] = round(trigger, 4)
     signal["current_price"] = round(current, 4)
